@@ -44,6 +44,15 @@ namespace BenderDios.Idiomas
     [Tooltip("CanvasLocalizer que gestionan canvas completos. Usar el boton 'Auto-buscar' del Inspector.")]
     [SerializeField] private CanvasLocalizer[] canvasLocalizers = new CanvasLocalizer[0];
 
+    // =====================================================================
+    // Condiciones de exclusion del Editor
+    // =====================================================================
+
+    [HideInInspector]
+    // Estos objetos y todos sus descendientes se omiten durante la busqueda
+    // y la creacion automatica de CanvasLocalizer.
+    [SerializeField] private GameObject[] _excludedLocalizationRoots = new GameObject[0];
+
     [Tooltip("TMP_Dropdown para cambiar idioma. Opcional. Se configura automaticamente al crear el selector.")]
     [SerializeField] private TMPro.TMP_Dropdown _languageDropdown;
 

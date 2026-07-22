@@ -216,17 +216,25 @@ Al iniciar, el sistema detecta el idioma del jugador:
 ## Herramientas del Editor
 
 ### Inspector del LocalizationManager
+- **Condiciones de exclusion**: define palabras clave y GameObjects raiz que deben quedar fuera de la busqueda y la creacion automatica de CanvasLocalizer
 - **Buscar Canvas sin Localizar**: escanea la escena y muestra candidatos
 - **Configuracion Rapida**: localiza todos los canvas de una vez
+- **Palabras clave de exclusion**: permite definir una lista comun que se copia a los nuevos CanvasLocalizer durante la configuracion rapida
 - **Auto-Traducir**: traduce idiomas faltantes con MyMemory API
 - **Vista Previa**: muestra traducciones sin entrar en Play Mode
 - **Dropdown**: configuracion del selector de idioma
 - **Listeners**: scripts externos que reaccionan al cambio de idioma
 
+Los GameObjects excluidos y todos sus descendientes se omiten por completo durante la busqueda. Los canvas sin textos traducibles tampoco reciben un CanvasLocalizer. Un CanvasLocalizer existente puede seguir utilizandose sin agregar su GameObject a la lista de exclusion.
+
 ### Inspector del CanvasLocalizer
 - **Escanear Canvas**: detecta todos los textos automaticamente
 - **Tabla de resultados**: editar claves, excluir textos, detectar duplicados
+- **Palabras clave de exclusion**: marca automaticamente como excluidos los textos que contengan alguna palabra configurada (coincidencia parcial, sin distinguir mayusculas y minusculas)
+- **Inclusion manual**: un texto excluido por palabra clave permanece visible en los resultados y se puede volver a incluir antes de exportar
 - **Exportar al JSON**: guarda textos y crea el archivo si no existe
+
+Las palabras clave solo controlan el registro y la actualizacion desde el Canvas al JSON. No eliminan claves que ya existan en el archivo de traducciones.
 
 ---
 

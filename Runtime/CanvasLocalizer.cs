@@ -53,6 +53,15 @@ public class CanvasLocalizer : UdonSharpBehaviour
     [SerializeField] private string baseLanguage = "en";
 
     // =====================================================================
+    // Configuracion de exclusion automatica
+    // =====================================================================
+
+    [Header("Exclusion automatica del JSON")]
+    // Las coincidencias se excluyen inicialmente, pero se pueden volver a incluir
+    // manualmente desde los resultados del escaneo.
+    [SerializeField] private string[] excludedKeywords = new string[0];
+
+    // =====================================================================
     // Arrays de textos (llenados automaticamente por el Editor)
     // =====================================================================
 

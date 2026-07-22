@@ -24,12 +24,14 @@ public class LocalizationManagerEditor : Editor
     private SerializedProperty _fallbackLanguage;
     private SerializedProperty _localizers;
     private SerializedProperty _canvasLocalizers;
+    private SerializedProperty _excludedLocalizationRoots;
     private SerializedProperty _languageDropdown;
     private SerializedProperty _dropdownLanguageCodes;
     private SerializedProperty _listeners;
 
     // Estado del editor (foldouts)
     private bool _showCanvasSearch = true;
+    private bool _showExclusionConditions = true;
     private bool _showTools = false;
     private bool _showListeners = false;
     private bool _showDropdown = false;
@@ -37,6 +39,9 @@ public class LocalizationManagerEditor : Editor
     private string _previewLanguage = "en";
     private static List<CanvasSearchResult> _canvasSearchResults;
     private int _quickSetupLangIndex = 0; // Default: "en" (indice en IdiomasLanguages.Codes)
+    private string _quickSetupExcludedKeywordsText = "";
+    private const string QUICK_SETUP_KEYWORDS_SESSION_KEY =
+        "Idiomas.QuickSetupExcludedKeywords";
 
     // Cache del JSON
     private DataDictionary _cachedData;
@@ -81,9 +86,14 @@ public class LocalizationManagerEditor : Editor
         _fallbackLanguage = serializedObject.FindProperty("fallbackLanguage");
         _localizers = serializedObject.FindProperty("localizers");
         _canvasLocalizers = serializedObject.FindProperty("canvasLocalizers");
+        _excludedLocalizationRoots = serializedObject.FindProperty("_excludedLocalizationRoots");
         _languageDropdown = serializedObject.FindProperty("_languageDropdown");
         _dropdownLanguageCodes = serializedObject.FindProperty("_dropdownLanguageCodes");
         _listeners = serializedObject.FindProperty("_listeners");
+
+        // Restaurar las palabras clave usadas durante esta sesion del Editor
+        _quickSetupExcludedKeywordsText = SessionState.GetString(
+            QUICK_SETUP_KEYWORDS_SESSION_KEY, "");
 
         // Limpiar resultados de escaneo anteriores para evitar
         // MissingReferenceException por GameObjects destruidos
@@ -161,6 +171,18 @@ public class LocalizationManagerEditor : Editor
                 $"{S("mgr_texts")}: {_localizers.arraySize}  |  " +
                 $"{S("mgr_listeners_label")}: {listenerCount}",
                 EditorStyles.helpBox);
+        }
+
+        // === CONDICIONES DE EXCLUSION ===
+        EditorGUILayout.Space(5);
+        _showExclusionConditions = EditorGUILayout.Foldout(
+            _showExclusionConditions, S("mgr_exclusion_conditions"), true,
+            EditorStyles.foldoutHeader);
+        if (_showExclusionConditions)
+        {
+            EditorGUI.indentLevel++;
+            DrawExclusionConditions();
+            EditorGUI.indentLevel--;
         }
 
         // === BUSCAR CANVAS SIN LOCALIZAR ===
@@ -379,6 +401,143 @@ public class LocalizationManagerEditor : Editor
     // Buscar Canvas en la escena
     // =====================================================================
 
+    /// <summary>
+    /// Dibuja las condiciones comunes de exclusion para las herramientas del Editor.
+    /// </summary>
+    private void DrawExclusionConditions()
+    {
+        EditorGUILayout.LabelField(
+            S("mgr_quick_setup_excluded_keywords"), EditorStyles.miniBoldLabel);
+        EditorGUILayout.LabelField(
+            S("mgr_quick_setup_excluded_keywords_desc"), EditorStyles.wordWrappedMiniLabel);
+
+        string newKeywordsText = EditorGUILayout.TextArea(
+            _quickSetupExcludedKeywordsText, GUILayout.MinHeight(60));
+        if (newKeywordsText != _quickSetupExcludedKeywordsText)
+        {
+            _quickSetupExcludedKeywordsText = newKeywordsText;
+            SessionState.SetString(
+                QUICK_SETUP_KEYWORDS_SESSION_KEY,
+                _quickSetupExcludedKeywordsText);
+            _canvasSearchResults = null;
+        }
+
+        EditorGUILayout.Space(5);
+        EditorGUI.BeginChangeCheck();
+        EditorGUILayout.PropertyField(
+            _excludedLocalizationRoots,
+            new GUIContent(S("mgr_excluded_gameobjects")),
+            true);
+        if (EditorGUI.EndChangeCheck())
+        {
+            serializedObject.ApplyModifiedProperties();
+            _canvasSearchResults = null;
+        }
+
+        EditorGUILayout.HelpBox(
+            S("mgr_excluded_gameobjects_note"), MessageType.Info);
+    }
+
+    /// <summary>
+    /// Devuelve true si el Transform pertenece a uno de los objetos excluidos
+    /// o se encuentra debajo de uno de ellos.
+    /// </summary>
+    private bool IsExcludedByGameObject(Transform targetTransform)
+    {
+        if (targetTransform == null || _excludedLocalizationRoots == null)
+            return false;
+
+        for (int i = 0; i < _excludedLocalizationRoots.arraySize; i++)
+        {
+            GameObject excludedRoot = _excludedLocalizationRoots
+                .GetArrayElementAtIndex(i).objectReferenceValue as GameObject;
+            if (excludedRoot == null) continue;
+
+            Transform excludedTransform = excludedRoot.transform;
+            if (targetTransform == excludedTransform ||
+                targetTransform.IsChildOf(excludedTransform))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Devuelve true si el texto pertenece a un Canvas hijo distinto del Canvas analizado.
+    /// </summary>
+    private static bool IsUnderNestedCanvas(Transform textTransform, Transform canvasRoot)
+    {
+        Transform current = textTransform.parent;
+        while (current != null && current != canvasRoot)
+        {
+            if (current.GetComponent<Canvas>() != null) return true;
+            current = current.parent;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// Cuenta unicamente los textos que se registrarian realmente en el JSON.
+    /// </summary>
+    private int CountTranslatableTexts(GameObject canvasObject,
+        out int tmpCount, out int legacyCount)
+    {
+        tmpCount = 0;
+        legacyCount = 0;
+        if (canvasObject == null) return 0;
+
+        Transform root = canvasObject.transform;
+        string[] excludedKeywords = ParseQuickSetupExcludedKeywords();
+
+        TextMeshProUGUI[] tmpAll =
+            canvasObject.GetComponentsInChildren<TextMeshProUGUI>(true);
+        for (int i = 0; i < tmpAll.Length; i++)
+        {
+            TextMeshProUGUI text = tmpAll[i];
+            if (IsUnderNestedCanvas(text.transform, root)) continue;
+            if (text.GetComponent<TextLocalizer>() != null) continue;
+            if (!IsTranslatableText(text.text)) continue;
+            if (ContainsExcludedKeyword(text.text, excludedKeywords)) continue;
+            tmpCount++;
+        }
+
+        Text[] legacyAll = canvasObject.GetComponentsInChildren<Text>(true);
+        for (int i = 0; i < legacyAll.Length; i++)
+        {
+            Text text = legacyAll[i];
+            if (IsUnderNestedCanvas(text.transform, root)) continue;
+            if (text.GetComponent<TextLocalizer>() != null) continue;
+            if (!IsTranslatableText(text.text)) continue;
+            if (ContainsExcludedKeyword(text.text, excludedKeywords)) continue;
+            legacyCount++;
+        }
+
+        return tmpCount + legacyCount;
+    }
+
+    private static bool IsTranslatableText(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return false;
+        for (int i = 0; i < text.Length; i++)
+            if (char.IsLetter(text[i])) return true;
+        return false;
+    }
+
+    private static bool ContainsExcludedKeyword(string text, string[] keywords)
+    {
+        if (string.IsNullOrEmpty(text) || keywords == null) return false;
+        for (int i = 0; i < keywords.Length; i++)
+        {
+            string keyword = keywords[i];
+            if (string.IsNullOrWhiteSpace(keyword)) continue;
+            if (text.IndexOf(keyword.Trim(), System.StringComparison.OrdinalIgnoreCase) >= 0)
+                return true;
+        }
+        return false;
+    }
+
     private class CanvasSearchResult
     {
         public GameObject gameObject;
@@ -400,18 +559,12 @@ public class LocalizationManagerEditor : Editor
             Canvas canvas = allCanvas[i];
             GameObject go = canvas.gameObject;
 
-            // Contar textos hijos
-            TextMeshProUGUI[] tmpAll = go.GetComponentsInChildren<TextMeshProUGUI>(true);
-            Text[] legacyAll = go.GetComponentsInChildren<Text>(true);
+            if (IsExcludedByGameObject(go.transform)) continue;
 
-            // Excluir textos que ya tengan TextLocalizer individual
-            int tmpCount = 0;
-            for (int t = 0; t < tmpAll.Length; t++)
-                if (tmpAll[t].GetComponent<TextLocalizer>() == null) tmpCount++;
-
-            int legacyCount = 0;
-            for (int t = 0; t < legacyAll.Length; t++)
-                if (legacyAll[t].GetComponent<TextLocalizer>() == null) legacyCount++;
+            // Contar solo los textos que se registrarian realmente en el JSON
+            int tmpCount;
+            int legacyCount;
+            CountTranslatableTexts(go, out tmpCount, out legacyCount);
 
             // Verificar si ya tiene CanvasLocalizer
             bool hasCL = go.GetComponent<CanvasLocalizer>() != null;
@@ -684,7 +837,7 @@ public class LocalizationManagerEditor : Editor
             }
 
             EditorGUILayout.LabelField(
-                $"canvasId: \"{clId}\"  |  {r.tmpCount + r.legacyCount} textos",
+                $"canvasId: \"{clId}\"  |  {(cl != null ? cl.GetTextCount() : 0)} textos",
                 EditorStyles.miniLabel);
 
             // Indicador de estado en el JSON
@@ -764,7 +917,7 @@ public class LocalizationManagerEditor : Editor
             if (!hasEmpty)
             {
                 EditorGUILayout.Space(5);
-                EditorGUILayout.LabelField(S("mgr_no_texts"), EditorStyles.miniLabel);
+                EditorGUILayout.LabelField(S("mgr_no_translatable"), EditorStyles.miniLabel);
                 hasEmpty = true;
             }
 
@@ -815,6 +968,21 @@ public class LocalizationManagerEditor : Editor
 
     private void AddCanvasLocalizerTo(CanvasSearchResult result)
     {
+        if (result == null || result.gameObject == null) return;
+        if (IsExcludedByGameObject(result.gameObject.transform)) return;
+
+        int currentTmpCount;
+        int currentLegacyCount;
+        if (CountTranslatableTexts(result.gameObject,
+            out currentTmpCount, out currentLegacyCount) == 0)
+        {
+            EditorUtility.DisplayDialog(
+                S("mgr_no_translatable_title"),
+                S("mgr_no_translatable_msg"), S("ok"));
+            ScanSceneForCanvas();
+            return;
+        }
+
         LocalizationManager mgr = (LocalizationManager)target;
         GameObject go = result.gameObject;
 
@@ -840,6 +1008,7 @@ public class LocalizationManagerEditor : Editor
         string uniqueId = IdiomasEditorUtils.GenerateUniqueCanvasId(go.name, newCL);
         if (idProp != null) idProp.stringValue = uniqueId;
 
+        ApplyQuickSetupExcludedKeywords(clSO);
         clSO.ApplyModifiedProperties();
 
         // Registrar en el array canvasLocalizers del manager
@@ -1343,6 +1512,48 @@ public class LocalizationManagerEditor : Editor
     // Configuracion Rapida: Localizar Todo
     // =====================================================================
 
+    /// <summary>
+    /// Convierte el texto del campo en una lista unica de palabras clave.
+    /// Ignora lineas vacias y espacios al principio o al final.
+    /// </summary>
+    private string[] ParseQuickSetupExcludedKeywords()
+    {
+        string[] lines = _quickSetupExcludedKeywordsText.Split(
+            new[] { '\r', '\n' },
+            System.StringSplitOptions.RemoveEmptyEntries);
+
+        List<string> result = new List<string>();
+        HashSet<string> unique = new HashSet<string>(
+            System.StringComparer.OrdinalIgnoreCase);
+
+        for (int i = 0; i < lines.Length; i++)
+        {
+            string keyword = lines[i].Trim();
+            if (string.IsNullOrEmpty(keyword)) continue;
+            if (unique.Add(keyword)) result.Add(keyword);
+        }
+
+        return result.ToArray();
+    }
+
+    /// <summary>
+    /// Copia las palabras clave comunes al CanvasLocalizer indicado.
+    /// </summary>
+    private void ApplyQuickSetupExcludedKeywords(SerializedObject canvasLocalizerObject)
+    {
+        if (canvasLocalizerObject == null) return;
+
+        SerializedProperty keywordsProp =
+            canvasLocalizerObject.FindProperty("excludedKeywords");
+        if (keywordsProp == null) return;
+
+        string[] keywords = ParseQuickSetupExcludedKeywords();
+        keywordsProp.arraySize = keywords.Length;
+
+        for (int i = 0; i < keywords.Length; i++)
+            keywordsProp.GetArrayElementAtIndex(i).stringValue = keywords[i];
+    }
+
     private void QuickSetupAll(int candidateCount, int candidateTextCount)
     {
         string baseLang = IdiomasLanguages.Codes[_quickSetupLangIndex];
@@ -1407,8 +1618,14 @@ public class LocalizationManagerEditor : Editor
         for (int i = 0; i < _canvasSearchResults.Count; i++)
         {
             CanvasSearchResult r = _canvasSearchResults[i];
+            if (r.gameObject == null) continue;
+            if (IsExcludedByGameObject(r.gameObject.transform)) continue;
             if (r.hasCanvasLocalizer) continue;
-            if (r.tmpCount + r.legacyCount == 0) continue;
+
+            int currentTmpCount;
+            int currentLegacyCount;
+            if (CountTranslatableTexts(r.gameObject,
+                out currentTmpCount, out currentLegacyCount) == 0) continue;
 
             CanvasLocalizer newCL = UdonSharpUndo.AddComponent<CanvasLocalizer>(r.gameObject);
             if (newCL == null)
@@ -1425,6 +1642,7 @@ public class LocalizationManagerEditor : Editor
             if (mgrProp != null) mgrProp.objectReferenceValue = mgr;
             string uniqueId = IdiomasEditorUtils.GenerateUniqueCanvasId(r.gameObject.name, newCL);
             if (idProp != null) idProp.stringValue = uniqueId;
+            ApplyQuickSetupExcludedKeywords(clSO);
             clSO.ApplyModifiedProperties();
 
             toProcess.Add(r);
@@ -1448,6 +1666,14 @@ public class LocalizationManagerEditor : Editor
             if (textsConfigured < 0)
             {
                 errors.Add($"Error al escanear '{r.gameObject.name}'");
+            }
+            else if (textsConfigured == 0)
+            {
+                // No conservar un CanvasLocalizer si no hay textos traducibles
+                UdonBehaviour backing = IdiomasEditorUtils.FindUdonBehaviourFor(cl);
+                if (backing != null) Undo.DestroyObjectImmediate(backing);
+                Undo.DestroyObjectImmediate(cl);
+                newLocalizers[i] = null;
             }
             else
             {

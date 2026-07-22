@@ -40,6 +40,7 @@ public class CanvasLocalizerEditor : Editor
     private SerializedProperty _tmpKeys;
     private SerializedProperty _legacyTexts;
     private SerializedProperty _legacyKeys;
+    private SerializedProperty _excludedKeywords;
     private SerializedProperty _excludedObjects;
 
     // =====================================================================
@@ -93,6 +94,7 @@ public class CanvasLocalizerEditor : Editor
         _tmpKeys = serializedObject.FindProperty("tmpKeys");
         _legacyTexts = serializedObject.FindProperty("legacyTexts");
         _legacyKeys = serializedObject.FindProperty("legacyKeys");
+        _excludedKeywords = serializedObject.FindProperty("excludedKeywords");
         _excludedObjects = serializedObject.FindProperty("_excludedObjects");
 
         // Auto-generar ID del canvas si esta vacio
@@ -274,6 +276,12 @@ public class CanvasLocalizerEditor : Editor
         // --- Idioma Base como dropdown ---
         DrawBaseLanguageDropdown();
 
+        // --- Palabras clave de exclusion automatica ---
+        EditorGUILayout.PropertyField(_excludedKeywords,
+            new GUIContent(S("cl_excluded_keywords")), true);
+        EditorGUILayout.LabelField(
+            S("cl_excluded_keywords_desc"), EditorStyles.wordWrappedMiniLabel);
+
         // Validar canvasId
         string canvasId = _canvasId.stringValue;
         if (string.IsNullOrEmpty(canvasId))
@@ -444,6 +452,7 @@ public class CanvasLocalizerEditor : Editor
                 currentText = text,
                 objectPath = GetRelativePath(root, tmp.transform),
                 excluded = excludedSet.Contains(tmp.gameObject) ||
+                           ContainsExcludedKeyword(text) ||
                            (!wasConfigured && IsNonTranslatable(text)),
                 existsInJson = false,
             });
@@ -478,6 +487,7 @@ public class CanvasLocalizerEditor : Editor
                 currentText = text,
                 objectPath = GetRelativePath(root, txt.transform),
                 excluded = excludedSet.Contains(txt.gameObject) ||
+                           ContainsExcludedKeyword(text) ||
                            (!wasConfiguredLegacy && IsNonTranslatable(text)),
                 existsInJson = false,
             });
@@ -1212,18 +1222,52 @@ public class CanvasLocalizerEditor : Editor
     /// </summary>
     private static bool IsNonTranslatable(string text)
     {
-        if (string.IsNullOrEmpty(text)) return true;
-
-        string trimmed = text.Trim();
-        if (trimmed.Length == 0) return true;
-
-        // Verificar si todos los caracteres son no-letra (numeros, signos, puntuacion, espacios)
-        for (int i = 0; i < trimmed.Length; i++)
-        {
-            if (char.IsLetter(trimmed[i])) return false;
-        }
-
+        if (string.IsNullOrWhiteSpace(text)) return true;
+        for (int i = 0; i < text.Length; i++)
+            if (char.IsLetter(text[i])) return false;
         return true;
+    }
+
+    /// <summary>
+    /// Comprueba si el texto contiene alguna de las palabras clave configuradas.
+    /// La comparacion no distingue entre mayusculas y minusculas.
+    /// </summary>
+    private bool ContainsExcludedKeyword(string text)
+    {
+        if (string.IsNullOrEmpty(text) || _excludedKeywords == null) return false;
+
+        string[] keywords = new string[_excludedKeywords.arraySize];
+        for (int i = 0; i < _excludedKeywords.arraySize; i++)
+            keywords[i] = _excludedKeywords.GetArrayElementAtIndex(i).stringValue;
+
+        return ContainsExcludedKeyword(text, keywords);
+    }
+
+    /// <summary>
+    /// Comprueba palabras clave desde una propiedad serializada durante la configuracion rapida.
+    /// </summary>
+    private static bool QuickSetup_ContainsExcludedKeyword(string text, SerializedProperty keywords)
+    {
+        if (string.IsNullOrEmpty(text) || keywords == null) return false;
+
+        string[] values = new string[keywords.arraySize];
+        for (int i = 0; i < keywords.arraySize; i++)
+            values[i] = keywords.GetArrayElementAtIndex(i).stringValue;
+
+        return ContainsExcludedKeyword(text, values);
+    }
+
+    private static bool ContainsExcludedKeyword(string text, string[] keywords)
+    {
+        if (string.IsNullOrEmpty(text) || keywords == null) return false;
+        for (int i = 0; i < keywords.Length; i++)
+        {
+            string keyword = keywords[i];
+            if (string.IsNullOrWhiteSpace(keyword)) continue;
+            if (text.IndexOf(keyword.Trim(), System.StringComparison.OrdinalIgnoreCase) >= 0)
+                return true;
+        }
+        return false;
     }
 
     // =====================================================================
@@ -1275,7 +1319,9 @@ public class CanvasLocalizerEditor : Editor
         List<string> tmpKeyList = new List<string>();
         List<Text> legacyList = new List<Text>();
         List<string> legacyKeyList = new List<string>();
+        List<GameObject> excludedList = new List<GameObject>();
         HashSet<string> usedKeys = new HashSet<string>();
+        SerializedProperty excludedKeywordsProp = clSO.FindProperty("excludedKeywords");
 
         // --- Escanear TextMeshProUGUI ---
         TextMeshProUGUI[] tmps = root.GetComponentsInChildren<TextMeshProUGUI>(true);
@@ -1287,6 +1333,11 @@ public class CanvasLocalizerEditor : Editor
             string text = tmp.text;
             if (string.IsNullOrEmpty(text) || string.IsNullOrWhiteSpace(text)) continue;
             if (IsNonTranslatable(text)) continue;
+            if (QuickSetup_ContainsExcludedKeyword(text, excludedKeywordsProp))
+            {
+                excludedList.Add(tmp.gameObject);
+                continue;
+            }
 
             string key = QuickSetup_GenerateKey(root, tmp.transform, canvasId, usedKeys);
             usedKeys.Add(key);
@@ -1308,6 +1359,11 @@ public class CanvasLocalizerEditor : Editor
             string text = txt.text;
             if (string.IsNullOrEmpty(text) || string.IsNullOrWhiteSpace(text)) continue;
             if (IsNonTranslatable(text)) continue;
+            if (QuickSetup_ContainsExcludedKeyword(text, excludedKeywordsProp))
+            {
+                excludedList.Add(txt.gameObject);
+                continue;
+            }
 
             string key = QuickSetup_GenerateKey(root, txt.transform, canvasId, usedKeys);
             usedKeys.Add(key);
@@ -1319,7 +1375,7 @@ public class CanvasLocalizerEditor : Editor
         }
 
         int totalTexts = tmpList.Count + legacyList.Count;
-        if (totalTexts == 0) return 0;
+        if (totalTexts == 0 && excludedList.Count == 0) return 0;
 
         // === Aplicar a los arrays serializados ===
         clSO = new SerializedObject(cl);
@@ -1327,6 +1383,7 @@ public class CanvasLocalizerEditor : Editor
         SerializedProperty tmpKeysProp = clSO.FindProperty("tmpKeys");
         SerializedProperty legacyTextsProp = clSO.FindProperty("legacyTexts");
         SerializedProperty legacyKeysProp = clSO.FindProperty("legacyKeys");
+        SerializedProperty excludedObjectsProp = clSO.FindProperty("_excludedObjects");
 
         tmpTextsProp.arraySize = tmpList.Count;
         tmpKeysProp.arraySize = tmpKeyList.Count;
@@ -1343,6 +1400,10 @@ public class CanvasLocalizerEditor : Editor
             legacyTextsProp.GetArrayElementAtIndex(i).objectReferenceValue = legacyList[i];
             legacyKeysProp.GetArrayElementAtIndex(i).stringValue = legacyKeyList[i];
         }
+
+        excludedObjectsProp.arraySize = excludedList.Count;
+        for (int i = 0; i < excludedList.Count; i++)
+            excludedObjectsProp.GetArrayElementAtIndex(i).objectReferenceValue = excludedList[i];
 
         clSO.ApplyModifiedProperties();
         return totalTexts;
