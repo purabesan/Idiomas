@@ -1051,6 +1051,7 @@ public class LocalizationManagerEditor : Editor
     private List<string> GetCanvasLocalizerKeys(CanvasLocalizer cl)
     {
         List<string> keys = new List<string>();
+        HashSet<string> uniqueKeys = new HashSet<string>();
         if (cl == null) return keys;
 
         SerializedObject clSO = new SerializedObject(cl);
@@ -1061,7 +1062,7 @@ public class LocalizationManagerEditor : Editor
             for (int i = 0; i < tmpKeys.arraySize; i++)
             {
                 string key = tmpKeys.GetArrayElementAtIndex(i).stringValue;
-                if (!string.IsNullOrEmpty(key)) keys.Add(key);
+                if (!string.IsNullOrEmpty(key) && uniqueKeys.Add(key)) keys.Add(key);
             }
         }
 
@@ -1071,7 +1072,7 @@ public class LocalizationManagerEditor : Editor
             for (int i = 0; i < legKeys.arraySize; i++)
             {
                 string key = legKeys.GetArrayElementAtIndex(i).stringValue;
-                if (!string.IsNullOrEmpty(key)) keys.Add(key);
+                if (!string.IsNullOrEmpty(key) && uniqueKeys.Add(key)) keys.Add(key);
             }
         }
 
@@ -1105,6 +1106,29 @@ public class LocalizationManagerEditor : Editor
     /// <summary>
     /// Elimina las claves de un CanvasLocalizer del archivo JSON de traducciones.
     /// </summary>
+    private bool IsTranslationKeyUsedElsewhere(string key, CanvasLocalizer excludedLocalizer)
+    {
+        for (int i = 0; i < _canvasLocalizers.arraySize; i++)
+        {
+            CanvasLocalizer other = _canvasLocalizers
+                .GetArrayElementAtIndex(i).objectReferenceValue as CanvasLocalizer;
+            if (other == null || other == excludedLocalizer) continue;
+
+            List<string> otherKeys = GetCanvasLocalizerKeys(other);
+            if (otherKeys.Contains(key)) return true;
+        }
+
+        for (int i = 0; i < _localizers.arraySize; i++)
+        {
+            TextLocalizer textLocalizer = _localizers
+                .GetArrayElementAtIndex(i).objectReferenceValue as TextLocalizer;
+            if (textLocalizer != null && textLocalizer.GetTranslationKey() == key)
+                return true;
+        }
+
+        return false;
+    }
+
     private void RemoveKeysFromJson(CanvasLocalizer cl, List<string> keys, int keysInJson)
     {
         if (keys.Count == 0 || keysInJson == 0) return;
@@ -1138,7 +1162,12 @@ public class LocalizationManagerEditor : Editor
         }
 
         // Crear HashSet para busqueda rapida
-        HashSet<string> keysToRemove = new HashSet<string>(keys);
+        HashSet<string> keysToRemove = new HashSet<string>();
+        for (int i = 0; i < keys.Count; i++)
+        {
+            if (!IsTranslationKeyUsedElsewhere(keys[i], cl))
+                keysToRemove.Add(keys[i]);
+        }
 
         // Eliminar claves de todos los idiomas
         int totalRemoved = 0;
