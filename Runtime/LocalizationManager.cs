@@ -52,6 +52,7 @@ namespace BenderDios.Idiomas
     // Estos objetos y todos sus descendientes se omiten durante la busqueda
     // y la creacion automatica de CanvasLocalizer.
     [SerializeField] private GameObject[] _excludedLocalizationRoots = new GameObject[0];
+    [SerializeField] private string[] _excludedLocalizationKeywords = new string[0];
 
     [Tooltip("TMP_Dropdown para cambiar idioma. Opcional. Se configura automaticamente al crear el selector.")]
     [SerializeField] private TMPro.TMP_Dropdown _languageDropdown;
