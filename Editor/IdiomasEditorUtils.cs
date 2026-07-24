@@ -132,6 +132,94 @@ public static class IdiomasEditorUtils
     }
 
     /// <summary>
+    /// Construye una ruta de jerarquia determinista para ordenar objetos.
+    /// Los hermanos con el mismo nombre incluyen su indice de aparicion.
+    /// </summary>
+    public static string GetStableHierarchyPath(Transform root, Transform child)
+    {
+        if (child == null) return "";
+
+        List<string> parts = new List<string>();
+        Transform current = child;
+        while (current != null && current != root)
+        {
+            int occurrence = GetSameNameSiblingOccurrence(current);
+            string name = current.name ?? "";
+            parts.Insert(0, name.Length + ":" + name + "[" + occurrence + "]");
+            current = current.parent;
+        }
+
+        string scenePath = child.gameObject.scene.path;
+        return (scenePath ?? "") + "/" + string.Join("/", parts);
+    }
+
+    /// <summary>
+    /// Obtiene la posicion de un componente entre los componentes del mismo
+    /// tipo en el GameObject.
+    /// </summary>
+    public static int GetStableComponentOrder(Component component)
+    {
+        if (component == null) return 0;
+        Component[] sameType = component.GetComponents(component.GetType());
+        for (int i = 0; i < sameType.Length; i++)
+        {
+            if (sameType[i] == component) return i;
+        }
+        return 0;
+    }
+
+    /// <summary>
+    /// Compara componentes por escena, jerarquia, tipo y orden local.
+    /// </summary>
+    public static int CompareStableComponents(Component a, Component b)
+    {
+        int comparison = string.Compare(
+            GetStableHierarchyPath(null, a != null ? a.transform : null),
+            GetStableHierarchyPath(null, b != null ? b.transform : null),
+            System.StringComparison.Ordinal);
+        if (comparison != 0) return comparison;
+
+        comparison = string.Compare(
+            a != null ? a.GetType().FullName : "",
+            b != null ? b.GetType().FullName : "",
+            System.StringComparison.Ordinal);
+        if (comparison != 0) return comparison;
+
+        return GetStableComponentOrder(a).CompareTo(
+            GetStableComponentOrder(b));
+    }
+
+    private static int GetSameNameSiblingOccurrence(Transform target)
+    {
+        int occurrence = 0;
+        if (target.parent != null)
+        {
+            for (int i = 0; i < target.GetSiblingIndex(); i++)
+            {
+                Transform sibling = target.parent.GetChild(i);
+                if (string.Equals(
+                    sibling.name, target.name, System.StringComparison.Ordinal))
+                {
+                    occurrence++;
+                }
+            }
+            return occurrence;
+        }
+
+        GameObject[] roots = target.gameObject.scene.GetRootGameObjects();
+        for (int i = 0; i < roots.Length; i++)
+        {
+            if (roots[i].transform == target) break;
+            if (string.Equals(
+                roots[i].name, target.name, System.StringComparison.Ordinal))
+            {
+                occurrence++;
+            }
+        }
+        return occurrence;
+    }
+
+    /// <summary>
     /// Genera un canvasId unico basado en el nombre del GameObject.
     /// Verifica todos los CanvasLocalizer de la escena para evitar colisiones.
     /// </summary>
@@ -139,6 +227,29 @@ public static class IdiomasEditorUtils
     {
         string baseName = NormalizeName(goName);
         if (string.IsNullOrEmpty(baseName)) baseName = "canvas";
+
+        List<Canvas> matchingCanvases = new List<Canvas>();
+        Canvas[] allCanvases = Object.FindObjectsByType<Canvas>(
+            FindObjectsInactive.Include, FindObjectsSortMode.None);
+        for (int i = 0; i < allCanvases.Length; i++)
+        {
+            if (NormalizeName(allCanvases[i].gameObject.name) == baseName)
+                matchingCanvases.Add(allCanvases[i]);
+        }
+        matchingCanvases.Sort((a, b) => string.Compare(
+            GetStableHierarchyPath(null, a.transform),
+            GetStableHierarchyPath(null, b.transform),
+            System.StringComparison.Ordinal));
+
+        int deterministicIndex = 0;
+        for (int i = 0; i < matchingCanvases.Count; i++)
+        {
+            if (matchingCanvases[i].gameObject == self.gameObject)
+            {
+                deterministicIndex = i;
+                break;
+            }
+        }
 
         HashSet<string> usedIds = new HashSet<string>();
         CanvasLocalizer[] allLocalizers = Object.FindObjectsByType<CanvasLocalizer>(FindObjectsInactive.Include, FindObjectsSortMode.None);
@@ -150,12 +261,12 @@ public static class IdiomasEditorUtils
                 usedIds.Add(otherId);
         }
 
-        string finalId = baseName;
-        int counter = 2;
+        int counter = deterministicIndex + 1;
+        string finalId = counter == 1 ? baseName : baseName + "_" + counter;
         while (usedIds.Contains(finalId))
         {
-            finalId = baseName + "_" + counter;
             counter++;
+            finalId = baseName + "_" + counter;
         }
 
         return finalId;

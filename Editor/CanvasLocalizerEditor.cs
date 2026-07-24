@@ -420,10 +420,11 @@ public class CanvasLocalizerEditor : Editor
         }
 
         _scanResults = new List<ScanEntry>();
-        HashSet<string> usedKeys = new HashSet<string>();
+        HashSet<string> usedKeys = GetBaseLanguageJsonKeys();
 
         // --- Buscar TextMeshProUGUI ---
         TextMeshProUGUI[] tmps = root.GetComponentsInChildren<TextMeshProUGUI>(true);
+        SortComponentsByStablePath(tmps, root);
         for (int i = 0; i < tmps.Length; i++)
         {
             TextMeshProUGUI tmp = tmps[i];
@@ -463,6 +464,7 @@ public class CanvasLocalizerEditor : Editor
 
         // --- Buscar Text (legacy) ---
         Text[] legacyTexts = root.GetComponentsInChildren<Text>(true);
+        SortComponentsByStablePath(legacyTexts, root);
         for (int i = 0; i < legacyTexts.Length; i++)
         {
             Text txt = legacyTexts[i];
@@ -857,6 +859,30 @@ public class CanvasLocalizerEditor : Editor
         return entry.shareCanonicalKey && !string.IsNullOrEmpty(entry.canonicalKey)
             ? entry.canonicalKey
             : entry.generatedKey;
+    }
+
+    private HashSet<string> GetBaseLanguageJsonKeys()
+    {
+        HashSet<string> keys = new HashSet<string>();
+        Object managerObj = _manager.objectReferenceValue;
+        if (managerObj == null) return keys;
+
+        SerializedObject mgrSO = new SerializedObject(managerObj);
+        SerializedProperty translationFile =
+            mgrSO.FindProperty("translationFile");
+        TextAsset textAsset = translationFile != null
+            ? translationFile.objectReferenceValue as TextAsset
+            : null;
+        if (textAsset == null) return keys;
+
+        Dictionary<string, Dictionary<string, string>> translations =
+            IdiomasEditorUtils.ParseJsonToDictionary(textAsset.text);
+        string baseLang = _baseLanguage.stringValue;
+        if (translations == null || !translations.ContainsKey(baseLang))
+            return keys;
+
+        keys.UnionWith(translations[baseLang].Keys);
+        return keys;
     }
 
     /// <summary>
@@ -1289,7 +1315,7 @@ public class CanvasLocalizerEditor : Editor
     /// Nombres genericos como "Text", "Label" se saltan en favor del padre.
     /// Si hay duplicados se agrega _2, _3, etc.
     /// </summary>
-    private string GenerateKey(Transform root, Transform textTransform,
+    private static string GenerateKey(Transform root, Transform textTransform,
         string canvasId, HashSet<string> usedKeys)
     {
         // Construir segmentos de ruta desde root hasta el texto
@@ -1343,6 +1369,30 @@ public class CanvasLocalizerEditor : Editor
         }
 
         return key;
+    }
+
+    private static void SortComponentsByStablePath<T>(
+        T[] components, Transform root) where T : Component
+    {
+        System.Array.Sort(components, (a, b) =>
+        {
+            int pathComparison = string.Compare(
+                IdiomasEditorUtils.GetStableHierarchyPath(root, a.transform),
+                IdiomasEditorUtils.GetStableHierarchyPath(root, b.transform),
+                System.StringComparison.Ordinal);
+            if (pathComparison != 0) return pathComparison;
+            return GetComponentOrder(a).CompareTo(GetComponentOrder(b));
+        });
+    }
+
+    private static int GetComponentOrder(Component component)
+    {
+        Component[] sameType = component.GetComponents(component.GetType());
+        for (int i = 0; i < sameType.Length; i++)
+        {
+            if (sameType[i] == component) return i;
+        }
+        return 0;
     }
 
     /// <summary>
@@ -1477,11 +1527,15 @@ public class CanvasLocalizerEditor : Editor
         List<Text> legacyList = new List<Text>();
         List<string> legacyKeyList = new List<string>();
         List<GameObject> excludedList = new List<GameObject>();
-        HashSet<string> usedKeys = new HashSet<string>();
+        // Reservar claves existentes para no sobrescribir una traduccion
+        // distinta al recrear los componentes.
+        HashSet<string> usedKeys = new HashSet<string>(
+            translations[baseLang].Keys);
         SerializedProperty excludedKeywordsProp = clSO.FindProperty("excludedKeywords");
 
         // --- Escanear TextMeshProUGUI ---
         TextMeshProUGUI[] tmps = root.GetComponentsInChildren<TextMeshProUGUI>(true);
+        SortComponentsByStablePath(tmps, root);
         for (int i = 0; i < tmps.Length; i++)
         {
             TextMeshProUGUI tmp = tmps[i];
@@ -1499,7 +1553,7 @@ public class CanvasLocalizerEditor : Editor
             string key;
             if (!canonicalByText.TryGetValue(text, out key))
             {
-                key = QuickSetup_GenerateKey(root, tmp.transform, canvasId, usedKeys);
+                key = GenerateKey(root, tmp.transform, canvasId, usedKeys);
                 canonicalByText[text] = key;
                 translations[baseLang][key] = text;
             }
@@ -1510,6 +1564,7 @@ public class CanvasLocalizerEditor : Editor
 
         // --- Escanear Text (legacy) ---
         Text[] legacyTextsArr = root.GetComponentsInChildren<Text>(true);
+        SortComponentsByStablePath(legacyTextsArr, root);
         for (int i = 0; i < legacyTextsArr.Length; i++)
         {
             Text txt = legacyTextsArr[i];
@@ -1527,7 +1582,7 @@ public class CanvasLocalizerEditor : Editor
             string key;
             if (!canonicalByText.TryGetValue(text, out key))
             {
-                key = QuickSetup_GenerateKey(root, txt.transform, canvasId, usedKeys);
+                key = GenerateKey(root, txt.transform, canvasId, usedKeys);
                 canonicalByText[text] = key;
                 translations[baseLang][key] = text;
             }
@@ -1584,48 +1639,6 @@ public class CanvasLocalizerEditor : Editor
             current = current.parent;
         }
         return false;
-    }
-
-    /// <summary>
-    /// Genera una clave de traduccion desde la jerarquia.
-    /// Version estatica para QuickSetup.
-    /// </summary>
-    private static string QuickSetup_GenerateKey(Transform root, Transform textTransform,
-        string canvasId, HashSet<string> usedKeys)
-    {
-        List<string> segments = new List<string>();
-        Transform current = textTransform;
-        while (current != null && current != root)
-        {
-            segments.Insert(0, current.name);
-            current = current.parent;
-        }
-
-        if (segments.Count > 1)
-        {
-            string lastName = segments[segments.Count - 1].ToLower().Trim();
-            if (GENERIC_NAMES.Contains(lastName))
-                segments.RemoveAt(segments.Count - 1);
-        }
-
-        for (int i = 0; i < segments.Count; i++)
-            segments[i] = IdiomasEditorUtils.NormalizeName(segments[i]);
-
-        segments.RemoveAll(s => string.IsNullOrEmpty(s));
-
-        string key = segments.Count == 0
-            ? canvasId + "_text"
-            : canvasId + "_" + string.Join("_", segments);
-
-        string baseKey = key;
-        int counter = 2;
-        while (usedKeys.Contains(key))
-        {
-            key = baseKey + "_" + counter;
-            counter++;
-        }
-
-        return key;
     }
 
 }

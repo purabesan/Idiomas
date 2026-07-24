@@ -266,12 +266,16 @@ public class InteractionLocalizerEditor : Editor
                 managerSO.FindProperty("_excludedLocalizationRoots");
             excludedKeywords = GetExcludedKeywords(
                 managerSO.FindProperty("_excludedLocalizationKeywords"));
+            AddBaseLanguageJsonKeys(managerSO, usedKeys);
         }
 
         UdonBehaviour[] udonBehaviours =
             FindObjectsByType<UdonBehaviour>(
                 FindObjectsInactive.Include,
                 FindObjectsSortMode.None);
+        System.Array.Sort(
+            udonBehaviours,
+            (a, b) => IdiomasEditorUtils.CompareStableComponents(a, b));
         for (int i = 0; i < udonBehaviours.Length; i++)
         {
             UdonBehaviour backing = udonBehaviours[i];
@@ -302,6 +306,9 @@ public class InteractionLocalizerEditor : Editor
         VRCPickup[] pickups = FindObjectsByType<VRCPickup>(
             FindObjectsInactive.Include,
             FindObjectsSortMode.None);
+        System.Array.Sort(
+            pickups,
+            (a, b) => IdiomasEditorUtils.CompareStableComponents(a, b));
         for (int i = 0; i < pickups.Length; i++)
         {
             VRCPickup pickup = pickups[i];
@@ -338,6 +345,28 @@ public class InteractionLocalizerEditor : Editor
             (a, b) => string.CompareOrdinal(a.path, b.path));
         WriteEntries(scanned);
         serializedObject.ApplyModifiedProperties();
+    }
+
+    private void AddBaseLanguageJsonKeys(
+        SerializedObject managerSO, HashSet<string> usedKeys)
+    {
+        SerializedProperty translationFile =
+            managerSO.FindProperty("translationFile");
+        TextAsset textAsset = translationFile != null
+            ? translationFile.objectReferenceValue as TextAsset
+            : null;
+        if (textAsset == null) return;
+
+        Dictionary<string, Dictionary<string, string>> translations =
+            IdiomasEditorUtils.ParseJsonToDictionary(textAsset.text);
+        string baseLang = _baseLanguage.stringValue;
+        if (translations == null ||
+            !translations.TryGetValue(
+                baseLang, out Dictionary<string, string> baseTranslations))
+        {
+            return;
+        }
+        usedKeys.UnionWith(baseTranslations.Keys);
     }
 
     private static void AddScannedEntry(
