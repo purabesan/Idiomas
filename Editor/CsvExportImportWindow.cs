@@ -22,7 +22,8 @@ using VRC.SDK3.Data;
 public class CsvExportImportWindow : EditorWindow
 {
     private static string S(string key) => IdiomasEditorStrings.Get(key);
-    private string _jsonPath;
+    [SerializeField] private TextAsset _jsonFile;
+    [SerializeField] private string _jsonPath;
     private string _statusMessage = "";
     private Vector2 _scrollPos;
 
@@ -38,26 +39,51 @@ public class CsvExportImportWindow : EditorWindow
 
     private void FindJsonPath()
     {
-        // Buscar en Assets/ (datos del usuario) y Packages/ (instalado via VPM)
-        string[][] searchPaths = new string[][] {
-            new[] { "Assets/Idiomas_Data" },
-            new[] { "Assets/Idiomas/Data" },
-            new[] { "Packages/com.benderdios.idiomas/Data" }
+        // Preferir los datos del usuario y conservar las rutas antiguas
+        // como fallback para instalaciones existentes.
+        string[] candidatePaths = {
+            "Assets/Idiomas_Data/translation.json",
+            "Assets/Idiomas/Data/translation.json",
+            "Packages/com.benderdios.idiomas/Data/translation.json"
         };
-        for (int s = 0; s < searchPaths.Length; s++)
+
+        for (int i = 0; i < candidatePaths.Length; i++)
         {
-            string[] guids = AssetDatabase.FindAssets("t:TextAsset", searchPaths[s]);
-            for (int i = 0; i < guids.Length; i++)
+            TextAsset candidate =
+                AssetDatabase.LoadAssetAtPath<TextAsset>(candidatePaths[i]);
+            if (candidate != null)
             {
-                string path = AssetDatabase.GUIDToAssetPath(guids[i]);
-                if (path.EndsWith("translation.json"))
-                {
-                    _jsonPath = Path.GetFullPath(path);
-                    return;
-                }
+                SetJsonFile(candidate);
+                return;
             }
         }
+
+        _jsonFile = null;
         _jsonPath = "";
+    }
+
+    private bool SetJsonFile(TextAsset jsonFile)
+    {
+        if (jsonFile == null)
+        {
+            _jsonFile = null;
+            _jsonPath = "";
+            _statusMessage = "";
+            return true;
+        }
+
+        string assetPath = AssetDatabase.GetAssetPath(jsonFile);
+        if (string.IsNullOrEmpty(assetPath) ||
+            Path.GetExtension(assetPath).ToLowerInvariant() != ".json")
+        {
+            _statusMessage = S("csv_invalid_json");
+            return false;
+        }
+
+        _jsonFile = jsonFile;
+        _jsonPath = Path.GetFullPath(assetPath);
+        _statusMessage = "";
+        return true;
     }
 
     private void OnGUI()
@@ -73,8 +99,19 @@ public class CsvExportImportWindow : EditorWindow
 
         // --- Archivo JSON ---
         EditorGUILayout.LabelField(S("csv_json_file"), EditorStyles.boldLabel);
+        EditorGUI.BeginChangeCheck();
+        TextAsset selectedJson = (TextAsset)EditorGUILayout.ObjectField(
+            _jsonFile, typeof(TextAsset), false);
+        if (EditorGUI.EndChangeCheck())
+        {
+            SetJsonFile(selectedJson);
+        }
+
+        string assetPath = _jsonFile != null
+            ? AssetDatabase.GetAssetPath(_jsonFile)
+            : "";
         EditorGUILayout.LabelField(
-            string.IsNullOrEmpty(_jsonPath) ? S("csv_not_found") : Path.GetFileName(_jsonPath),
+            string.IsNullOrEmpty(assetPath) ? S("csv_not_found") : assetPath,
             EditorStyles.helpBox);
 
         if (string.IsNullOrEmpty(_jsonPath) || !File.Exists(_jsonPath))
@@ -196,9 +233,12 @@ public class CsvExportImportWindow : EditorWindow
 
         // Guardar
         string csvDir = Path.GetDirectoryName(_jsonPath);
+        string defaultCsvName = Path.GetFileNameWithoutExtension(_jsonPath);
+        if (string.IsNullOrEmpty(defaultCsvName))
+            defaultCsvName = "translation";
 
         string savePath = EditorUtility.SaveFilePanel(
-            S("csv_save_dialog"), csvDir, "translation", "csv");
+            S("csv_save_dialog"), csvDir, defaultCsvName, "csv");
         if (string.IsNullOrEmpty(savePath)) return;
 
         File.WriteAllText(savePath, sb.ToString(), Encoding.UTF8);
@@ -287,6 +327,10 @@ public class CsvExportImportWindow : EditorWindow
         string newJson = IdiomasEditorUtils.WriteDictionaryToJson(translations);
         File.WriteAllText(_jsonPath, newJson, Encoding.UTF8);
         AssetDatabase.Refresh();
+
+        string importedAssetPath = FileUtil.GetProjectRelativePath(_jsonPath);
+        if (!string.IsNullOrEmpty(importedAssetPath))
+            _jsonFile = AssetDatabase.LoadAssetAtPath<TextAsset>(importedAssetPath);
 
         _statusMessage = string.Format(S("csv_imported"), imported, Path.GetFileName(csvPath));
         Debug.Log($"[Idiomas CSV] {_statusMessage}");
