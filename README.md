@@ -149,6 +149,20 @@ Menu: `Tools > Idiomas > Exportar-Importar CSV`
 Permite exportar las traducciones a CSV para editarlas en Google Sheets o Excel,
 y luego importarlas de vuelta al JSON. Util para colaborar con traductores.
 
+### Limpiar componentes de la escena
+
+Menu: `Tools > Idiomas > Cleanup Scene Components`
+
+Elimina de todas las escenas abiertas los componentes `CanvasLocalizer`, incluyendo
+los objetos inactivos. Tambien elimina sus `UdonBehaviour` asociados y limpia las
+referencias correspondientes del `LocalizationManager`.
+
+Antes de eliminar, muestra una lista de los GameObjects afectados y pide
+confirmacion. La operacion se puede deshacer con `Ctrl+Z`.
+
+Los archivos JSON de traduccion, los componentes `LocalizationManager`, los
+prefabs y los componentes `TextLocalizer` no se modifican.
+
 ---
 
 ## Idiomas soportados
@@ -259,6 +273,7 @@ Idiomas/
 │   ├── IdiomasEditorUtils.cs        # Utilidades compartidas
 │   ├── IdiomasEditorStrings.cs      # Traducciones del propio inspector (11 idiomas)
 │   ├── IdiomasPrefabCreator.cs      # Creador de demos
+│   ├── IdiomasSceneCleanup.cs       # Limpieza de componentes de escena
 │   └── Idiomas.Editor.asmdef        # Assembly definition
 ├── Prefabs/
 │   └── LocalizationManager.prefab   # Prefab listo para usar
