@@ -54,6 +54,8 @@ namespace BenderDios.Idiomas
     [SerializeField] private GameObject[] _excludedLocalizationRoots = new GameObject[0];
     [HideInInspector]
     // Cada elemento es una condicion independiente; los elementos vacios se ignoran.
+    [SerializeField] private string[] _excludedLocalizationKeywords =
+        new string[0];
 
     // Permite desactivar toda la localizacion de textos de interaccion.
     [SerializeField] private bool includeInteractionTexts;

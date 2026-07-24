@@ -255,7 +255,7 @@ public class InteractionLocalizerEditor : Editor
             _manager.objectReferenceValue as LocalizationManager;
         bool includeDefaultUse = false;
         SerializedProperty excludedRoots = null;
-        string[] excludedKeywords = GetExcludedKeywords();
+        string[] excludedKeywords = new string[0];
         if (manager != null)
         {
             SerializedObject managerSO = new SerializedObject(manager);
@@ -264,6 +264,8 @@ public class InteractionLocalizerEditor : Editor
             includeDefaultUse = option != null && option.boolValue;
             excludedRoots =
                 managerSO.FindProperty("_excludedLocalizationRoots");
+            excludedKeywords = GetExcludedKeywords(
+                managerSO.FindProperty("_excludedLocalizationKeywords"));
         }
 
         UdonBehaviour[] udonBehaviours =
@@ -711,13 +713,19 @@ public class InteractionLocalizerEditor : Editor
         return false;
     }
 
-    private static string[] GetExcludedKeywords()
+    private static string[] GetExcludedKeywords(
+        SerializedProperty keywordsProperty)
     {
-        const string sessionKey = "Idiomas.QuickSetupExcludedKeywords";
-        string value = SessionState.GetString(sessionKey, "");
-        return value.Split(
-            new[] { '\r', '\n' },
-            System.StringSplitOptions.RemoveEmptyEntries);
+        if (keywordsProperty == null) return new string[0];
+        List<string> keywords = new List<string>();
+        for (int i = 0; i < keywordsProperty.arraySize; i++)
+        {
+            string keyword = keywordsProperty
+                .GetArrayElementAtIndex(i).stringValue;
+            if (string.IsNullOrWhiteSpace(keyword)) continue;
+            keywords.Add(keyword.Trim());
+        }
+        return keywords.ToArray();
     }
 
     private static bool ContainsExcludedKeyword(

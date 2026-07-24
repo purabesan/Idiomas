@@ -26,6 +26,7 @@ public class LocalizationManagerEditor : Editor
     private SerializedProperty _localizers;
     private SerializedProperty _canvasLocalizers;
     private SerializedProperty _excludedLocalizationRoots;
+    private SerializedProperty _excludedLocalizationKeywords;
     private SerializedProperty _includeInteractionTexts;
     private SerializedProperty _includeDefaultUseText;
     private SerializedProperty _interactionLocalizers;
@@ -35,7 +36,7 @@ public class LocalizationManagerEditor : Editor
 
     // Estado del editor (foldouts)
     private bool _showCanvasSearch = true;
-    private bool _showExclusionConditions = true;
+    private bool _showExclusionConditions = false;
     private bool _showCanvasResults = true;
     private bool _showInteractionResults = true;
     private bool _showTools = false;
@@ -49,9 +50,6 @@ public class LocalizationManagerEditor : Editor
     private static readonly Dictionary<int, bool> _interactionCandidateFoldouts =
         new Dictionary<int, bool>();
     private int _quickSetupLangIndex = 0; // Default: "en" (indice en IdiomasLanguages.Codes)
-    private string _quickSetupExcludedKeywordsText = "";
-    private const string QUICK_SETUP_KEYWORDS_SESSION_KEY =
-        "Idiomas.QuickSetupExcludedKeywords";
 
     // Cache del JSON
     private DataDictionary _cachedData;
@@ -97,6 +95,8 @@ public class LocalizationManagerEditor : Editor
         _localizers = serializedObject.FindProperty("localizers");
         _canvasLocalizers = serializedObject.FindProperty("canvasLocalizers");
         _excludedLocalizationRoots = serializedObject.FindProperty("_excludedLocalizationRoots");
+        _excludedLocalizationKeywords =
+            serializedObject.FindProperty("_excludedLocalizationKeywords");
         _includeInteractionTexts =
             serializedObject.FindProperty("includeInteractionTexts");
         _includeDefaultUseText =
@@ -106,8 +106,7 @@ public class LocalizationManagerEditor : Editor
         _languageDropdown = serializedObject.FindProperty("_languageDropdown");
         _dropdownLanguageCodes = serializedObject.FindProperty("_dropdownLanguageCodes");
         _listeners = serializedObject.FindProperty("_listeners");
-        _quickSetupExcludedKeywordsText = SessionState.GetString(
-            QUICK_SETUP_KEYWORDS_SESSION_KEY, "");
+        MigrateLegacyExcludedKeywords();
 
         // Limpiar resultados de escaneo anteriores para evitar
         // MissingReferenceException por GameObjects destruidos
@@ -115,6 +114,38 @@ public class LocalizationManagerEditor : Editor
         _canvasSearchResults = null;
         _interactionSearchResults = null;
         _interactionDetectedObjectCount = 0;
+    }
+
+    private void MigrateLegacyExcludedKeywords()
+    {
+        if (_excludedLocalizationKeywords == null ||
+            _excludedLocalizationKeywords.arraySize > 0)
+        {
+            return;
+        }
+
+        const string sessionKey = "Idiomas.QuickSetupExcludedKeywords";
+        string legacyValue = SessionState.GetString(sessionKey, "");
+        if (string.IsNullOrWhiteSpace(legacyValue)) return;
+
+        string[] values = legacyValue.Split(
+            new[] { '\r', '\n' },
+            System.StringSplitOptions.RemoveEmptyEntries);
+        HashSet<string> unique = new HashSet<string>(
+            System.StringComparer.OrdinalIgnoreCase);
+        for (int i = 0; i < values.Length; i++)
+        {
+            string keyword = values[i].Trim();
+            if (string.IsNullOrEmpty(keyword) || !unique.Add(keyword))
+                continue;
+            int index = _excludedLocalizationKeywords.arraySize;
+            _excludedLocalizationKeywords.InsertArrayElementAtIndex(index);
+            _excludedLocalizationKeywords.GetArrayElementAtIndex(index)
+                .stringValue = keyword;
+        }
+
+        serializedObject.ApplyModifiedPropertiesWithoutUndo();
+        SessionState.EraseString(sessionKey);
     }
 
     public override void OnInspectorGUI()
@@ -1664,19 +1695,18 @@ public class LocalizationManagerEditor : Editor
     private void DrawExclusionConditions()
     {
         EditorGUILayout.LabelField(
-            S("mgr_quick_setup_excluded_keywords"), EditorStyles.miniBoldLabel);
-        EditorGUILayout.LabelField(
             S("mgr_quick_setup_excluded_keywords_desc"),
             EditorStyles.wordWrappedMiniLabel);
+        EditorGUILayout.Space(3);
 
-        string newKeywordsText = EditorGUILayout.TextArea(
-            _quickSetupExcludedKeywordsText, GUILayout.MinHeight(60));
-        if (newKeywordsText != _quickSetupExcludedKeywordsText)
+        EditorGUI.BeginChangeCheck();
+        EditorGUILayout.PropertyField(
+            _excludedLocalizationKeywords,
+            new GUIContent(S("mgr_quick_setup_excluded_keywords")),
+            true);
+        if (EditorGUI.EndChangeCheck())
         {
-            _quickSetupExcludedKeywordsText = newKeywordsText;
-            SessionState.SetString(
-                QUICK_SETUP_KEYWORDS_SESSION_KEY,
-                _quickSetupExcludedKeywordsText);
+            serializedObject.ApplyModifiedProperties();
             _canvasSearchResults = null;
             _interactionSearchResults = null;
             _interactionDetectedObjectCount = 0;
@@ -2194,7 +2224,9 @@ public class LocalizationManagerEditor : Editor
 
             GUIStyle grayStyle = new GUIStyle(EditorStyles.miniLabel);
             grayStyle.normal.textColor = Color.gray;
-            EditorGUILayout.LabelField($"  {r.gameObject.name}", grayStyle);
+            EditorGUILayout.LabelField(
+                $"  {r.gameObject.name}, {r.hierarchyPath}",
+                grayStyle);
         }
         }
 
@@ -3069,22 +3101,22 @@ public class LocalizationManagerEditor : Editor
     // =====================================================================
 
     /// <summary>
-    /// Convierte el texto del campo en una lista unica de palabras clave.
-    /// Ignora lineas vacias y espacios al principio o al final.
+    /// Obtiene una lista unica de palabras clave.
+    /// Ignora elementos vacios y espacios al principio o al final.
     /// </summary>
     private string[] ParseQuickSetupExcludedKeywords()
     {
-        string[] lines = _quickSetupExcludedKeywordsText.Split(
-            new[] { '\r', '\n' },
-            System.StringSplitOptions.RemoveEmptyEntries);
-
         List<string> result = new List<string>();
         HashSet<string> unique = new HashSet<string>(
             System.StringComparer.OrdinalIgnoreCase);
 
-        for (int i = 0; i < lines.Length; i++)
+        if (_excludedLocalizationKeywords == null) return result.ToArray();
+        for (int i = 0; i < _excludedLocalizationKeywords.arraySize; i++)
         {
-            string keyword = lines[i].Trim();
+            string keyword = _excludedLocalizationKeywords
+                .GetArrayElementAtIndex(i).stringValue;
+            if (keyword == null) continue;
+            keyword = keyword.Trim();
             if (string.IsNullOrEmpty(keyword)) continue;
             if (unique.Add(keyword)) result.Add(keyword);
         }
