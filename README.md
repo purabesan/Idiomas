@@ -1,13 +1,21 @@
 # Idiomas - Sistema de Localizacion para VRChat
 
+> [!IMPORTANT]
+> Esta rama `develop` corresponde a una edicion personal no oficial de Idiomas.
+> Incluye funciones adicionales que no forman parte de la version oficial.
+>
+> Versiones publicadas de este fork:
+> https://github.com/purabesan/Idiomas/releases
+
 Sistema de localizacion standalone para mundos de VRChat usando UdonSharp.
-Traduce automaticamente todos los textos de un Canvas a multiples idiomas.
+Traduce textos de Canvas y mensajes de interaccion de Udon y Pickup a multiples idiomas.
 
 **100% independiente.** No requiere YamaPlayer ni ningun otro sistema externo.
 **Compatible con PC y Quest.**
 
 📖 **Documentacion completa:** https://emerytheec.github.io/Idiomas-docs/
 📦 **Booth.pm (gratis, .unitypackage):** https://bender-dios.booth.pm/items/8201435
+🇯🇵 **Referencia en japones:** [README_jp.md](README_jp.md)
 
 ---
 
@@ -83,17 +91,28 @@ renderizan correctamente.
    - Si no existe archivo JSON, lo crea automaticamente
    - Llena los arrays del componente
 
-### Configuracion Rapida (multiples canvas de una vez)
+### Configuracion Rapida
 
-Si tienes muchos canvas sin localizar:
+Si tienes varios Canvas o Interaction Text sin localizar:
 
 1. Selecciona el **LocalizationManager** en la Hierarchy
-2. En el Inspector, abre **Buscar Canvas sin Localizar**
-3. Clic en **"Escanear Escena"**
-4. Selecciona el **Idioma Base** de tus textos actuales
-5. Clic en **"Configuracion Rapida: Localizar Todo"**
-   - Anade CanvasLocalizer a todos los canvas candidatos
-   - Escanea textos y exporta al JSON automaticamente
+2. Configura si deseas incluir **Interaction Text**
+3. Configura las **Condiciones de exclusion** si es necesario
+4. Abre **Buscar Textos sin Localizar**
+5. Clic en **"Escanear Escena"**
+6. Revisa por separado las listas **Canvas** e **InteractionText**
+7. Selecciona el **Idioma Base**
+8. Clic en **"Configuracion Rapida: Localizar Todo"**
+
+La configuracion rapida:
+
+- agrega `CanvasLocalizer` solamente a los Canvas que tengan textos traducibles
+- reutiliza el `InteractionLocalizer` existente o lo crea si falta
+- registra los textos habilitados
+- exporta todas las claves al mismo archivo JSON
+
+Despues puedes revisar la inclusion y las claves desde los Inspectors de
+`CanvasLocalizer` e `InteractionLocalizer`.
 
 ### Metodo individual: TextLocalizer (un componente por texto)
 
@@ -106,18 +125,33 @@ Para textos sueltos que no estan en un canvas:
 
 ### Textos de interaccion de Udon y Pickup
 
-Para localizar los mensajes que VRChat muestra al interactuar o usar un objeto:
+Se admiten:
+
+- `UdonSharpBehaviour.InteractionText`
+- `VRCPickup.InteractionText`
+- `VRCPickup.UseText`
+
+Para incluirlos durante la Configuracion Rapida:
 
 1. Selecciona el **LocalizationManager** en la Hierarchy
-2. En el Inspector, abre **Buscar Textos sin Localizar**
-3. Activa **Interaction Text**
-4. Clic en **"Escanear Escena"**
-5. Revisa los resultados, desmarca los que no quieras traducir y ajusta sus claves
-6. Selecciona el **Idioma Base**
-7. Ejecuta la **Configuracion Rapida** junto con los textos de Canvas
+2. Activa **Interaction Text**
+3. Activa **Default "Use"** solamente si tambien deseas traducir el valor predeterminado `Use`
+4. Ejecuta **"Escanear Escena"**
+5. Ejecuta la **Configuracion Rapida**
 
-Se admiten `UdonSharpBehaviour.InteractionText`,
-`VRCPickup.InteractionText` y `VRCPickup.UseText`.
+El valor predeterminado exacto `Use` se omite normalmente para evitar registrar
+una gran cantidad de textos innecesarios.
+
+Para revisar o modificar cada entrada:
+
+1. Selecciona el `InteractionLocalizer`
+2. Clic en **"Escanear Interaction Text"**
+3. Usa el filtro o los botones de inclusion y exclusion
+4. Edita las claves si es necesario
+5. Clic en **"Exportar al JSON y Aplicar"**
+
+`InteractionLocalizer` gestiona los objetos de destino de forma centralizada.
+No se agrega un componente Localizer a cada `UdonSharpBehaviour` o `VRCPickup`.
 Los textos se actualizan automaticamente cuando cambia el idioma.
 
 ---
@@ -170,14 +204,19 @@ y luego importarlas de vuelta al JSON. Util para colaborar con traductores.
 Menu: `Tools > Idiomas > Cleanup Scene Components`
 
 Elimina de todas las escenas abiertas los componentes `CanvasLocalizer`, incluyendo
-los objetos inactivos. Tambien elimina sus `UdonBehaviour` asociados y limpia las
-referencias correspondientes del `LocalizationManager`.
+los objetos inactivos. Tambien elimina sus `UdonBehaviour` asociados, limpia las
+referencias correspondientes del `LocalizationManager` y vacia las entradas
+registradas en `InteractionLocalizer`.
 
-Antes de eliminar, muestra una lista de los GameObjects afectados y pide
-confirmacion. La operacion se puede deshacer con `Ctrl+Z`.
+El objeto y el componente `InteractionLocalizer` no se eliminan. Solamente se
+vacian sus arrays de Interaction Text para poder reutilizarlos.
+
+Antes de eliminar, muestra la cantidad de `CanvasLocalizer`, la cantidad de
+Interaction Text registrados y los paths de los GameObjects afectados.
 
 Los archivos JSON de traduccion, los componentes `LocalizationManager`, los
-prefabs y los componentes `TextLocalizer` no se modifican.
+prefabs, los componentes `InteractionLocalizer` y los componentes `TextLocalizer`
+no se eliminan.
 
 ---
 
@@ -231,6 +270,16 @@ Se coloca en **un solo texto** para traduccion individual.
 - Soporta prefijo, sufijo y rich text (`{t}` como placeholder)
 - Se puede cambiar la clave en runtime
 
+### InteractionLocalizer
+Gestiona de forma centralizada los textos de interaccion de Udon y Pickup.
+
+- Soporta `UdonSharpBehaviour.InteractionText`
+- Soporta `VRCPickup.InteractionText` y `VRCPickup.UseText`
+- Permite incluir o excluir entradas individualmente
+- Permite filtrar resultados y editar claves
+- Exporta sus textos al mismo JSON utilizado por los otros Localizer
+- Se reutiliza durante la Configuracion Rapida si ya existe
+
 ---
 
 ## Deteccion Automatica de Idioma
@@ -247,9 +296,10 @@ Al iniciar, el sistema detecta el idioma del jugador:
 ## Herramientas del Editor
 
 ### Inspector del LocalizationManager
-- **Condiciones de exclusion**: define palabras clave y GameObjects raiz que deben quedar fuera de la busqueda y la creacion automatica de CanvasLocalizer
-- **Buscar Canvas sin Localizar**: escanea la escena y muestra candidatos
-- **Configuracion Rapida**: localiza todos los canvas de una vez
+- **Interaction Text**: incluye los textos de interaccion de UdonSharpBehaviour y VRCPickup
+- **Condiciones de exclusion**: define palabras clave y GameObjects raiz que deben quedar fuera de la busqueda y del proceso de localizacion
+- **Buscar Textos sin Localizar**: escanea la escena y muestra por separado Canvas e InteractionText
+- **Configuracion Rapida**: configura Canvas e Interaction Text de una vez
 - **Palabras clave de exclusion**: permite definir una lista comun que se copia a los nuevos CanvasLocalizer durante la configuracion rapida
 - **Auto-Traducir**: traduce idiomas faltantes con MyMemory API
 - **Vista Previa**: muestra traducciones sin entrar en Play Mode
@@ -267,7 +317,22 @@ Los GameObjects excluidos y todos sus descendientes se omiten por completo duran
 
 Las palabras clave solo controlan el registro y la actualizacion desde el Canvas al JSON. No eliminan claves que ya existan en el archivo de traducciones.
 
-Cuando varios textos del mismo idioma base son exactamente iguales, pueden compartir una clave canonica. De esta forma el JSON guarda una sola entrada, la traduccion automatica realiza una sola solicitud y el CSV contiene una sola fila. La opcion se puede desactivar individualmente desde los resultados del escaneo. Si un texto que comparte clave cambia, se separa automaticamente en una clave independiente para no modificar los otros usos.
+Cuando varios textos del mismo idioma base son exactamente iguales, pueden
+compartir una clave canonica. De esta forma, el JSON y el CSV contienen una sola
+entrada y se evita procesar repetidamente el mismo texto durante la traduccion
+automatica.
+
+La opcion se puede desactivar individualmente cuando dos textos iguales necesitan
+traducciones diferentes por su contexto. Si un texto que comparte clave cambia,
+se separa automaticamente en una clave independiente para no modificar los otros
+usos.
+
+Los IDs de Canvas y las nuevas claves se generan utilizando un orden determinista
+basado en la jerarquia de la escena. Si la jerarquia y los objetos relevantes no
+cambian, volver a crear los Localizer genera las mismas claves.
+
+Las claves existentes del idioma base se reservan para evitar que un nuevo escaneo
+sobrescriba una traduccion perteneciente a otro texto.
 
 ---
 
@@ -296,7 +361,8 @@ Idiomas/
 ├── Prefabs/
 │   └── LocalizationManager.prefab   # Prefab listo para usar
 ├── package.json                     # Metadatos VPM
-└── README.md
+├── README.md                        # Documentacion en espanol
+└── README_jp.md                     # Referencia en japones
 ```
 
 ---
@@ -421,7 +487,7 @@ VRChat ofrece PlayerData para persistencia entre sesiones.
 
 ## Compatibilidad
 
-- Unity 2022.3.x (requerido por VRChat)
+- Unity 2022.3.22f1 (requerido por VRChat)
 - VRChat SDK Worlds >= 3.8.1
 - UdonSharp (incluido en VRChat SDK)
 - TextMeshPro (incluido en Unity)
