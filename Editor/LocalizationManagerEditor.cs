@@ -631,12 +631,18 @@ public class LocalizationManagerEditor : Editor
         // Filtrar GameObjects destruidos antes de ordenar
         _canvasSearchResults.RemoveAll(r => r.gameObject == null);
 
-        // Ordenar: primero los que NO tienen CanvasLocalizer, luego los que si
+        // Ordenar primero por estado y despues por una ruta estructural estable.
+        // Esto mantiene el mismo orden al recrear CanvasLocalizer.
         _canvasSearchResults.Sort((a, b) =>
         {
             if (a.hasCanvasLocalizer != b.hasCanvasLocalizer)
                 return a.hasCanvasLocalizer ? 1 : -1;
-            return string.Compare(a.gameObject.name, b.gameObject.name);
+            return string.Compare(
+                IdiomasEditorUtils.GetStableHierarchyPath(
+                    null, a.gameObject.transform),
+                IdiomasEditorUtils.GetStableHierarchyPath(
+                    null, b.gameObject.transform),
+                System.StringComparison.Ordinal);
         });
     }
 
