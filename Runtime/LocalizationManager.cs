@@ -52,6 +52,15 @@ namespace BenderDios.Idiomas
     // Estos objetos y todos sus descendientes se omiten durante la busqueda
     // y la creacion automatica de CanvasLocalizer.
     [SerializeField] private GameObject[] _excludedLocalizationRoots = new GameObject[0];
+    [HideInInspector]
+    // Cada elemento es una condicion independiente; los elementos vacios se ignoran.
+
+    // Permite desactivar toda la localizacion de textos de interaccion.
+    [SerializeField] private bool includeInteractionTexts;
+    // "Use" es el valor predeterminado de VRCPickup.UseText y normalmente no requiere traduccion.
+    [SerializeField] private bool includeDefaultUseText;
+    [SerializeField] private InteractionLocalizer[] interactionLocalizers =
+        new InteractionLocalizer[0];
 
     [Tooltip("TMP_Dropdown para cambiar idioma. Opcional. Se configura automaticamente al crear el selector.")]
     [SerializeField] private TMPro.TMP_Dropdown _languageDropdown;
@@ -726,6 +735,16 @@ namespace BenderDios.Idiomas
                 }
             }
         }
+
+        // Actualizar textos de interaccion solo cuando la opcion esta activada
+        if (includeInteractionTexts && interactionLocalizers != null)
+        {
+            for (int i = 0; i < interactionLocalizers.Length; i++)
+            {
+                if (Utilities.IsValid(interactionLocalizers[i]))
+                    interactionLocalizers[i].UpdateAllTexts();
+            }
+        }
     }
 
     // =====================================================================
@@ -913,5 +932,30 @@ namespace BenderDios.Idiomas
         // Aplicar idioma actual al nuevo canvas localizer
         canvasLocalizer.UpdateAllTexts();
     }
+
+    /// <summary>Registra un localizador de textos de interaccion en runtime.</summary>
+    public void RegisterInteractionLocalizer(InteractionLocalizer interactionLocalizer)
+    {
+        if (!Utilities.IsValid(interactionLocalizer)) return;
+
+        if (interactionLocalizers != null)
+        {
+            for (int i = 0; i < interactionLocalizers.Length; i++)
+            {
+                if (interactionLocalizers[i] == interactionLocalizer) return;
+            }
+        }
+
+        int oldLen = interactionLocalizers != null ? interactionLocalizers.Length : 0;
+        InteractionLocalizer[] newArr = new InteractionLocalizer[oldLen + 1];
+        for (int i = 0; i < oldLen; i++)
+            newArr[i] = interactionLocalizers[i];
+
+        newArr[oldLen] = interactionLocalizer;
+        interactionLocalizers = newArr;
+        if (includeInteractionTexts)
+            interactionLocalizer.UpdateAllTexts();
+    }
+
 }
 }

@@ -104,6 +104,22 @@ Para textos sueltos que no estan en un canvas:
 3. Asigna el **LocalizationManager**
 4. Escribe la **clave de traduccion** (ej: `btn_start`)
 
+### Textos de interaccion de Udon y Pickup
+
+Para localizar los mensajes que VRChat muestra al interactuar o usar un objeto:
+
+1. Selecciona el **LocalizationManager** en la Hierarchy
+2. En el Inspector, abre **Buscar Textos sin Localizar**
+3. Activa **Interaction Text**
+4. Clic en **"Escanear Escena"**
+5. Revisa los resultados, desmarca los que no quieras traducir y ajusta sus claves
+6. Selecciona el **Idioma Base**
+7. Ejecuta la **Configuracion Rapida** junto con los textos de Canvas
+
+Se admiten `UdonSharpBehaviour.InteractionText`,
+`VRCPickup.InteractionText` y `VRCPickup.UseText`.
+Los textos se actualizan automaticamente cuando cambia el idioma.
+
 ---
 
 ## Traducir a otros idiomas
@@ -196,6 +212,7 @@ El cerebro del sistema. Solo necesitas **uno por escena**.
 - Fallback inteligente: idioma del jugador → variantes → zona horaria → fallback
 - Gestiona el dropdown de seleccion de idioma
 - Notifica a todos los CanvasLocalizer y TextLocalizer cuando cambia el idioma
+- Actualiza los textos de interaccion de UdonSharpBehaviour y VRCPickup
 
 ### CanvasLocalizer
 Se coloca en el **raiz de un Canvas** y traduce todos los textos hijos.
@@ -262,6 +279,7 @@ Idiomas/
 │   ├── LocalizationManager.cs       # Cerebro del sistema
 │   ├── CanvasLocalizer.cs           # Localizador de canvas completo
 │   ├── TextLocalizer.cs             # Localizador de texto individual
+│   ├── InteractionLocalizer.cs      # Textos de interaccion Udon y Pickup
 │   └── Idiomas.Runtime.asmdef       # Assembly definition
 ├── Editor/
 │   ├── LocalizationManagerEditor.cs # Inspector del Manager
@@ -302,6 +320,7 @@ Namespace: `BenderDios.Idiomas`
 | `RegisterListener(UdonSharpBehaviour)` | Registra un listener que recibe `_OnLanguageChanged` al cambiar idioma. |
 | `RegisterLocalizer(TextLocalizer)` | Registra un TextLocalizer en runtime. |
 | `RegisterCanvasLocalizer(CanvasLocalizer)` | Registra un CanvasLocalizer en runtime. |
+| `RegisterInteractionLocalizer(InteractionLocalizer)` | Registra un InteractionLocalizer en runtime. |
 | `OnLanguageDropdownChanged()` | Callback que el TMP_Dropdown dispara via `SendCustomEvent` al cambiar la seleccion. |
 
 #### Metodos sin parametros (para `SendCustomEvent`)

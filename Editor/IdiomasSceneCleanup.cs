@@ -6,8 +6,8 @@ using UnityEngine;
 using VRC.Udon;
 
 /// <summary>
-/// Removes scene components added by Idiomas without modifying translation assets.
-/// Add future automatically-added component types to this cleanup entry point.
+/// Removes scene components added by Idiomas without modifying
+/// translation files.
 /// </summary>
 public static class IdiomasSceneCleanup
 {
@@ -19,7 +19,11 @@ public static class IdiomasSceneCleanup
     public static void CleanupSceneComponents()
     {
         List<CanvasLocalizer> localizers = FindSceneCanvasLocalizers();
-        if (localizers.Count == 0)
+        List<InteractionLocalizer> interactionLocalizers =
+            FindConfiguredInteractionLocalizers();
+        int interactionTextCount =
+            CountInteractionEntries(interactionLocalizers);
+        if (localizers.Count == 0 && interactionLocalizers.Count == 0)
         {
             EditorUtility.DisplayDialog(
                 S("cleanup_title"),
@@ -30,7 +34,10 @@ public static class IdiomasSceneCleanup
 
         if (!EditorUtility.DisplayDialog(
                 S("cleanup_title"),
-                BuildConfirmationMessage(localizers),
+                BuildConfirmationMessage(
+                    localizers,
+                    interactionLocalizers,
+                    interactionTextCount),
                 S("cleanup_remove"),
                 S("cancel")))
         {
@@ -41,6 +48,7 @@ public static class IdiomasSceneCleanup
         Undo.SetCurrentGroupName("Cleanup Idiomas Scene Components");
 
         RemoveCanvasLocalizerReferences(localizers);
+        ClearInteractionLocalizers(interactionLocalizers);
 
         int removedBackingBehaviours = 0;
         for (int i = 0; i < localizers.Count; i++)
@@ -63,6 +71,8 @@ public static class IdiomasSceneCleanup
         Debug.Log(
             $"[Idiomas] Scene cleanup removed {localizers.Count} CanvasLocalizer component(s) " +
             $"and {removedBackingBehaviours} backing UdonBehaviour component(s). " +
+            $"Cleared {interactionTextCount} Interaction Text entries from " +
+            $"{interactionLocalizers.Count} InteractionLocalizer component(s). " +
             "Translation files were not modified.");
     }
 
@@ -97,14 +107,98 @@ public static class IdiomasSceneCleanup
         return result;
     }
 
-    private static string BuildConfirmationMessage(List<CanvasLocalizer> localizers)
+    private static List<InteractionLocalizer> FindConfiguredInteractionLocalizers()
+    {
+        InteractionLocalizer[] found =
+            Object.FindObjectsByType<InteractionLocalizer>(
+                FindObjectsInactive.Include,
+                FindObjectsSortMode.None);
+        List<InteractionLocalizer> result =
+            new List<InteractionLocalizer>();
+        for (int i = 0; i < found.Length; i++)
+        {
+            InteractionLocalizer localizer = found[i];
+            if (localizer == null ||
+                EditorUtility.IsPersistent(localizer) ||
+                !localizer.gameObject.scene.IsValid() ||
+                !HasInteractionEntries(localizer))
+            {
+                continue;
+            }
+            result.Add(localizer);
+        }
+        result.Sort((a, b) => string.CompareOrdinal(
+            GetHierarchyPath(a.transform),
+            GetHierarchyPath(b.transform)));
+        return result;
+    }
+
+    private static bool HasInteractionEntries(InteractionLocalizer localizer)
+    {
+        SerializedObject serializedLocalizer =
+            new SerializedObject(localizer);
+        string[] arrays =
+        {
+            "interactTargets", "interactKeys", "interactEnabled",
+            "pickupInteractionTargets", "pickupInteractionKeys",
+            "pickupInteractionEnabled", "pickupUseTargets",
+            "pickupUseKeys", "pickupUseEnabled"
+        };
+        for (int i = 0; i < arrays.Length; i++)
+        {
+            SerializedProperty property =
+                serializedLocalizer.FindProperty(arrays[i]);
+            if (property != null && property.arraySize > 0) return true;
+        }
+        return false;
+    }
+
+    private static int CountInteractionEntries(
+        List<InteractionLocalizer> localizers)
+    {
+        int total = 0;
+        for (int i = 0; i < localizers.Count; i++)
+        {
+            SerializedObject serializedLocalizer =
+                new SerializedObject(localizers[i]);
+            total += CountPairedEntries(
+                serializedLocalizer.FindProperty("interactTargets"),
+                serializedLocalizer.FindProperty("interactKeys"));
+            total += CountPairedEntries(
+                serializedLocalizer.FindProperty(
+                    "pickupInteractionTargets"),
+                serializedLocalizer.FindProperty(
+                    "pickupInteractionKeys"));
+            total += CountPairedEntries(
+                serializedLocalizer.FindProperty("pickupUseTargets"),
+                serializedLocalizer.FindProperty("pickupUseKeys"));
+        }
+        return total;
+    }
+
+    private static int CountPairedEntries(
+        SerializedProperty targets, SerializedProperty keys)
+    {
+        if (targets == null || keys == null) return 0;
+        return Mathf.Min(targets.arraySize, keys.arraySize);
+    }
+
+    private static string BuildConfirmationMessage(
+        List<CanvasLocalizer> localizers,
+        List<InteractionLocalizer> interactionLocalizers,
+        int interactionTextCount)
     {
         StringBuilder message = new StringBuilder();
-        message.AppendLine(string.Format(S("cleanup_confirm_header"), localizers.Count));
+        message.AppendLine(string.Format(
+            S("cleanup_confirm_header"),
+            localizers.Count,
+            interactionTextCount));
         message.AppendLine();
 
-        int listedCount = Mathf.Min(localizers.Count, MaxListedTargets);
-        for (int i = 0; i < listedCount; i++)
+        int listedCount = 0;
+        for (int i = 0;
+            i < localizers.Count && listedCount < MaxListedTargets;
+            i++, listedCount++)
         {
             CanvasLocalizer localizer = localizers[i];
             message.Append("• ");
@@ -113,12 +207,26 @@ public static class IdiomasSceneCleanup
             message.AppendLine(GetHierarchyPath(localizer.transform));
         }
 
-        if (localizers.Count > listedCount)
+        for (int i = 0;
+            i < interactionLocalizers.Count &&
+                listedCount < MaxListedTargets;
+            i++, listedCount++)
+        {
+            InteractionLocalizer localizer = interactionLocalizers[i];
+            message.Append("• ");
+            message.Append(localizer.gameObject.scene.name);
+            message.Append('/');
+            message.Append(GetHierarchyPath(localizer.transform));
+            message.AppendLine(" (InteractionLocalizer)");
+        }
+
+        int totalCount = localizers.Count + interactionLocalizers.Count;
+        if (totalCount > listedCount)
         {
             message.Append("• ");
             message.AppendLine(string.Format(
                 S("cleanup_more_targets"),
-                localizers.Count - listedCount));
+                totalCount - listedCount));
         }
 
         message.AppendLine();
@@ -127,6 +235,36 @@ public static class IdiomasSceneCleanup
         message.AppendLine();
         message.Append(S("cleanup_undo_hint"));
         return message.ToString();
+    }
+
+    private static void ClearInteractionLocalizers(
+        List<InteractionLocalizer> localizers)
+    {
+        string[] arrays =
+        {
+            "interactTargets", "interactKeys", "interactEnabled",
+            "pickupInteractionTargets", "pickupInteractionKeys",
+            "pickupInteractionEnabled", "pickupUseTargets",
+            "pickupUseKeys", "pickupUseEnabled"
+        };
+        for (int i = 0; i < localizers.Count; i++)
+        {
+            InteractionLocalizer localizer = localizers[i];
+            if (localizer == null) continue;
+
+            Undo.RecordObject(
+                localizer, "Clear Idiomas Interaction Text Entries");
+            SerializedObject serializedLocalizer =
+                new SerializedObject(localizer);
+            for (int j = 0; j < arrays.Length; j++)
+            {
+                SerializedProperty property =
+                    serializedLocalizer.FindProperty(arrays[j]);
+                if (property != null) property.ClearArray();
+            }
+            serializedLocalizer.ApplyModifiedProperties();
+            EditorUtility.SetDirty(localizer);
+        }
     }
 
     private static void RemoveCanvasLocalizerReferences(List<CanvasLocalizer> localizers)
