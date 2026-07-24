@@ -218,13 +218,24 @@ public class AutoTranslateWindow : EditorWindow
         EditorGUILayout.LabelField(
             string.Format(S("at_total_keys"), _allKeys.Count, _translations.Count),
             EditorStyles.miniLabel);
-        EditorGUILayout.LabelField(
-            S("at_source_note"),
-            EditorStyles.miniLabel);
 
         // --- Idiomas destino ---
         EditorGUILayout.Space(8);
         EditorGUILayout.LabelField(S("at_target_title"), EditorStyles.boldLabel);
+
+        EditorGUILayout.BeginHorizontal();
+        if (GUILayout.Button(S("at_select_all")))
+        {
+            for (int i = 0; i < LANG_CODES.Length; i++)
+                _targetChecked[i] = CountMissing(LANG_CODES[i]) > 0;
+        }
+        if (GUILayout.Button(S("at_deselect_all")))
+        {
+            for (int i = 0; i < _targetChecked.Length; i++)
+                _targetChecked[i] = false;
+        }
+        EditorGUILayout.EndHorizontal();
+
         EditorGUILayout.LabelField(S("at_target_desc"),
             EditorStyles.miniLabel);
         EditorGUILayout.Space(3);
@@ -239,22 +250,27 @@ public class AutoTranslateWindow : EditorWindow
 
             string label;
             if (missing == 0)
-                label = $"{langCode} — {LANG_NAMES[i]}  ({existing} claves, {S("at_complete")})";
+                label = $"{langCode} — {LANG_NAMES[i]}  ({string.Format(S("at_complete_summary"), existing)})";
             else if (existing == 0)
                 label = $"{langCode} — {LANG_NAMES[i]}  ({string.Format(S("at_new_lang"), missing)})";
             else
                 label = $"{langCode} — {LANG_NAMES[i]}  ({string.Format(S("at_existing_missing"), existing, missing)})";
 
             EditorGUILayout.BeginHorizontal();
+            EditorGUI.BeginDisabledGroup(missing == 0);
             _targetChecked[i] = EditorGUILayout.ToggleLeft(label, _targetChecked[i]);
+            EditorGUI.EndDisabledGroup();
             if (_targetChecked[i])
                 totalMissingSelected += missing;
             EditorGUILayout.EndHorizontal();
         }
 
         EditorGUILayout.Space(5);
-        EditorGUILayout.LabelField(string.Format(S("at_total"), totalMissingSelected),
-            EditorStyles.helpBox);
+        string translationSummary =
+            string.Format(S("at_total"), totalMissingSelected) +
+            "\n" +
+            S("at_source_note");
+        EditorGUILayout.HelpBox(translationSummary, MessageType.None);
 
         // --- Boton traducir ---
         EditorGUILayout.Space(8);
