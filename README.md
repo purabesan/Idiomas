@@ -236,7 +236,22 @@ Los GameObjects excluidos y todos sus descendientes se omiten por completo duran
 
 Las palabras clave solo controlan el registro y la actualizacion desde el Canvas al JSON. No eliminan claves que ya existan en el archivo de traducciones.
 
-Cuando varios textos del mismo idioma base son exactamente iguales, pueden compartir una clave canonica. De esta forma el JSON guarda una sola entrada, la traduccion automatica realiza una sola solicitud y el CSV contiene una sola fila. La opcion se puede desactivar individualmente desde los resultados del escaneo. Si un texto que comparte clave cambia, se separa automaticamente en una clave independiente para no modificar los otros usos.
+Cuando varios textos del mismo idioma base son exactamente iguales, pueden
+compartir una clave canonica. De esta forma, el JSON y el CSV contienen una sola
+entrada y se evita procesar repetidamente el mismo texto durante la traduccion
+automatica.
+
+La opcion se puede desactivar individualmente cuando dos textos iguales necesitan
+traducciones diferentes por su contexto. Si un texto que comparte clave cambia,
+se separa automaticamente en una clave independiente para no modificar los otros
+usos.
+
+Los IDs de Canvas y las nuevas claves se generan utilizando un orden determinista
+basado en la jerarquia de la escena. Si la jerarquia y los objetos relevantes no
+cambian, volver a crear los CanvasLocalizer genera las mismas claves.
+
+Las claves existentes del idioma base se reservan para evitar que un nuevo escaneo
+sobrescriba una traduccion perteneciente a otro texto.
 
 ---
 
