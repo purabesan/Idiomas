@@ -421,8 +421,8 @@ VRChat ofrece PlayerData para persistencia entre sesiones.
 
 ## Compatibilidad
 
-- Unity 2022.3.x (requerido por VRChat)
-- VRChat SDK Worlds >= 3.8.1
+- Unity 2022.3.22f1 (requerido por VRChat)
+- VRChat SDK Worlds >= 3.10.4
 - UdonSharp (incluido en VRChat SDK)
 - TextMeshPro (incluido en Unity)
 - Compatible con Quest y PC
