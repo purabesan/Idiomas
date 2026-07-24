@@ -257,15 +257,16 @@ public class CsvExportImportWindow : EditorWindow
         string csvPath = EditorUtility.OpenFilePanel(S("csv_open_dialog"), "", "csv");
         if (string.IsNullOrEmpty(csvPath)) return;
 
-        string[] lines = File.ReadAllLines(csvPath, Encoding.UTF8);
-        if (lines.Length < 2)
+        string csv = File.ReadAllText(csvPath, Encoding.UTF8);
+        List<string[]> records = ParseCsvRecords(csv);
+        if (records.Count < 2)
         {
             _statusMessage = S("csv_empty");
             return;
         }
 
         // Parsear cabecera
-        string[] header = ParseCsvLine(lines[0]);
+        string[] header = records[0];
         if (header.Length < 2 || header[0].Trim().ToLower() != "key")
         {
             _statusMessage = S("csv_bad_header");
@@ -292,11 +293,16 @@ public class CsvExportImportWindow : EditorWindow
 
         // Parsear filas
         int imported = 0;
-        for (int row = 1; row < lines.Length; row++)
+        int processedRows = 0;
+        for (int row = 1; row < records.Count; row++)
         {
-            if (string.IsNullOrEmpty(lines[row].Trim())) continue;
-
-            string[] cols = ParseCsvLine(lines[row]);
+            string[] cols = records[row];
+            if (cols.Length == 1 &&
+                string.IsNullOrWhiteSpace(cols[0]))
+            {
+                continue;
+            }
+            processedRows++;
             if (cols.Length < 2) continue;
 
             string key = cols[0].Trim();
@@ -336,7 +342,11 @@ public class CsvExportImportWindow : EditorWindow
         Debug.Log($"[Idiomas CSV] {_statusMessage}");
 
         EditorUtility.DisplayDialog(S("csv_import_done_title"),
-            string.Format(S("csv_import_done_msg"), imported, string.Join(", ", languages), lines.Length - 1),
+            string.Format(
+                S("csv_import_done_msg"),
+                imported,
+                string.Join(", ", languages),
+                processedRows),
             S("ok"));
     }
 
@@ -356,24 +366,26 @@ public class CsvExportImportWindow : EditorWindow
     }
 
     /// <summary>
-    /// Parsea una linea CSV respetando comillas (campos con comas dentro de comillas).
+    /// Parsea registros CSV respetando comillas, comas y saltos de linea
+    /// dentro de los campos.
     /// </summary>
-    private static string[] ParseCsvLine(string line)
+    private static List<string[]> ParseCsvRecords(string csv)
     {
+        List<string[]> records = new List<string[]>();
         List<string> fields = new List<string>();
         bool inQuotes = false;
         StringBuilder current = new StringBuilder();
 
-        for (int i = 0; i < line.Length; i++)
+        for (int i = 0; i < csv.Length; i++)
         {
-            char c = line[i];
+            char c = csv[i];
 
             if (inQuotes)
             {
                 if (c == '"')
                 {
                     // Comilla doble escapada ""
-                    if (i + 1 < line.Length && line[i + 1] == '"')
+                    if (i + 1 < csv.Length && csv[i + 1] == '"')
                     {
                         current.Append('"');
                         i++;
@@ -399,14 +411,32 @@ public class CsvExportImportWindow : EditorWindow
                     fields.Add(current.ToString());
                     current.Clear();
                 }
+                else if (c == '\r' || c == '\n')
+                {
+                    fields.Add(current.ToString());
+                    current.Clear();
+                    records.Add(fields.ToArray());
+                    fields.Clear();
+                    if (c == '\r' &&
+                        i + 1 < csv.Length &&
+                        csv[i + 1] == '\n')
+                    {
+                        i++;
+                    }
+                }
                 else
                 {
                     current.Append(c);
                 }
             }
         }
-        fields.Add(current.ToString());
-        return fields.ToArray();
+
+        if (fields.Count > 0 || current.Length > 0)
+        {
+            fields.Add(current.ToString());
+            records.Add(fields.ToArray());
+        }
+        return records;
     }
 
 }
