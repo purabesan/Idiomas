@@ -189,6 +189,64 @@ public static class IdiomasEditorUtils
             GetStableComponentOrder(b));
     }
 
+    /// <summary>
+    /// Cuenta todas las referencias de una clave entre los Localizer de la escena.
+    /// Incluye CanvasLocalizer, InteractionLocalizer y TextLocalizer.
+    /// </summary>
+    public static int CountSceneTranslationKeyReferences(string key)
+    {
+        if (string.IsNullOrEmpty(key)) return 0;
+
+        int count = 0;
+        CanvasLocalizer[] canvasLocalizers =
+            Object.FindObjectsByType<CanvasLocalizer>(
+                FindObjectsInactive.Include, FindObjectsSortMode.None);
+        for (int i = 0; i < canvasLocalizers.Length; i++)
+        {
+            SerializedObject so = new SerializedObject(canvasLocalizers[i]);
+            count += CountStringArrayValue(so.FindProperty("tmpKeys"), key);
+            count += CountStringArrayValue(so.FindProperty("legacyKeys"), key);
+        }
+
+        InteractionLocalizer[] interactionLocalizers =
+            Object.FindObjectsByType<InteractionLocalizer>(
+                FindObjectsInactive.Include, FindObjectsSortMode.None);
+        for (int i = 0; i < interactionLocalizers.Length; i++)
+        {
+            SerializedObject so =
+                new SerializedObject(interactionLocalizers[i]);
+            count += CountStringArrayValue(
+                so.FindProperty("interactKeys"), key);
+            count += CountStringArrayValue(
+                so.FindProperty("pickupInteractionKeys"), key);
+            count += CountStringArrayValue(
+                so.FindProperty("pickupUseKeys"), key);
+        }
+
+        TextLocalizer[] textLocalizers =
+            Object.FindObjectsByType<TextLocalizer>(
+                FindObjectsInactive.Include, FindObjectsSortMode.None);
+        for (int i = 0; i < textLocalizers.Length; i++)
+        {
+            if (textLocalizers[i].GetTranslationKey() == key) count++;
+        }
+        return count;
+    }
+
+    private static int CountStringArrayValue(
+        SerializedProperty property, string value)
+    {
+        if (property == null) return 0;
+
+        int count = 0;
+        for (int i = 0; i < property.arraySize; i++)
+        {
+            if (property.GetArrayElementAtIndex(i).stringValue == value)
+                count++;
+        }
+        return count;
+    }
+
     private static int GetSameNameSiblingOccurrence(Transform target)
     {
         int occurrence = 0;

@@ -341,6 +341,8 @@ public class InteractionLocalizerEditor : Editor
             }
         }
 
+        ReconcileTranslationKeys(
+            scanned, GetBaseLanguageEntries(manager));
         scanned.Sort(
             (a, b) => string.CompareOrdinal(a.path, b.path));
         WriteEntries(scanned);
@@ -367,6 +369,140 @@ public class InteractionLocalizerEditor : Editor
             return;
         }
         usedKeys.UnionWith(baseTranslations.Keys);
+    }
+
+    private Dictionary<string, string> GetBaseLanguageEntries(
+        LocalizationManager manager)
+    {
+        if (manager == null) return new Dictionary<string, string>();
+
+        SerializedObject managerSO = new SerializedObject(manager);
+        SerializedProperty translationFile =
+            managerSO.FindProperty("translationFile");
+        TextAsset textAsset = translationFile != null
+            ? translationFile.objectReferenceValue as TextAsset
+            : null;
+        if (textAsset == null) return new Dictionary<string, string>();
+
+        Dictionary<string, Dictionary<string, string>> translations =
+            IdiomasEditorUtils.ParseJsonToDictionary(textAsset.text);
+        string baseLang = _baseLanguage.stringValue;
+        if (translations != null &&
+            translations.TryGetValue(
+                baseLang, out Dictionary<string, string> baseEntries))
+        {
+            return baseEntries;
+        }
+        return new Dictionary<string, string>();
+    }
+
+    private static void ReconcileTranslationKeys(
+        List<Entry> entries,
+        Dictionary<string, string> baseEntries)
+    {
+        if (entries == null || baseEntries == null) return;
+
+        Dictionary<string, string> canonicalByText =
+            new Dictionary<string, string>(System.StringComparer.Ordinal);
+        List<string> baseKeys = new List<string>(baseEntries.Keys);
+        baseKeys.Sort(System.StringComparer.Ordinal);
+        for (int i = 0; i < baseKeys.Count; i++)
+        {
+            string value = baseEntries[baseKeys[i]];
+            if (!string.IsNullOrEmpty(value) &&
+                !canonicalByText.ContainsKey(value))
+            {
+                canonicalByText[value] = baseKeys[i];
+            }
+        }
+
+        HashSet<string> reservedKeys = new HashSet<string>(
+            baseEntries.Keys, System.StringComparer.Ordinal);
+        for (int i = 0; i < entries.Count; i++)
+        {
+            if (!string.IsNullOrEmpty(entries[i].key))
+                reservedKeys.Add(entries[i].key);
+        }
+
+        Dictionary<string, int> referenceCounts =
+            new Dictionary<string, int>(System.StringComparer.Ordinal);
+        for (int i = 0; i < entries.Count; i++)
+        {
+            Entry entry = entries[i];
+            if (!entry.enabled || string.IsNullOrWhiteSpace(entry.key))
+                continue;
+
+            string oldKey = entry.key;
+            if (!string.IsNullOrEmpty(entry.text) &&
+                canonicalByText.TryGetValue(
+                    entry.text, out string canonicalKey) &&
+                canonicalKey != oldKey)
+            {
+                ChangeEntryKey(
+                    entry, canonicalKey, referenceCounts, reservedKeys);
+            }
+            else if (baseEntries.TryGetValue(
+                    oldKey, out string storedText) &&
+                storedText != entry.text &&
+                GetReferenceCount(referenceCounts, oldKey) > 1)
+            {
+                string detachedKey = GenerateDetachedKey(
+                    oldKey, reservedKeys, referenceCounts);
+                ChangeEntryKey(
+                    entry, detachedKey, referenceCounts, reservedKeys);
+            }
+
+            if (!string.IsNullOrEmpty(entry.text) &&
+                !canonicalByText.ContainsKey(entry.text))
+            {
+                canonicalByText[entry.text] = entry.key;
+            }
+        }
+    }
+
+    private static int GetReferenceCount(
+        Dictionary<string, int> referenceCounts, string key)
+    {
+        if (!referenceCounts.TryGetValue(key, out int count))
+        {
+            count =
+                IdiomasEditorUtils.CountSceneTranslationKeyReferences(key);
+            referenceCounts[key] = count;
+        }
+        return count;
+    }
+
+    private static void ChangeEntryKey(
+        Entry entry,
+        string newKey,
+        Dictionary<string, int> referenceCounts,
+        HashSet<string> reservedKeys)
+    {
+        string oldKey = entry.key;
+        if (oldKey == newKey) return;
+
+        referenceCounts[oldKey] = Mathf.Max(
+            0, GetReferenceCount(referenceCounts, oldKey) - 1);
+        referenceCounts[newKey] =
+            GetReferenceCount(referenceCounts, newKey) + 1;
+        entry.key = newKey;
+        reservedKeys.Add(newKey);
+    }
+
+    private static string GenerateDetachedKey(
+        string originalKey,
+        HashSet<string> reservedKeys,
+        Dictionary<string, int> referenceCounts)
+    {
+        int suffix = 2;
+        string candidate = originalKey + "_" + suffix;
+        while (reservedKeys.Contains(candidate) ||
+            GetReferenceCount(referenceCounts, candidate) > 0)
+        {
+            suffix++;
+            candidate = originalKey + "_" + suffix;
+        }
+        return candidate;
     }
 
     private static void AddScannedEntry(
@@ -446,6 +582,10 @@ public class InteractionLocalizerEditor : Editor
         }
         if (!translations.ContainsKey(baseLang))
             translations[baseLang] = new Dictionary<string, string>();
+
+        ReconcileTranslationKeys(entries, translations[baseLang]);
+        WriteEntries(entries);
+        serializedObject.ApplyModifiedProperties();
 
         Dictionary<string, string> canonicalByText =
             new Dictionary<string, string>(System.StringComparer.Ordinal);

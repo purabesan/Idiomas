@@ -571,28 +571,21 @@ public class CanvasLocalizerEditor : Editor
         if (!VRCJson.TryDeserializeFromJson(textAsset.text, out DataToken data)) return;
         if (data.TokenType != TokenType.DataDictionary) return;
 
-        // Buscar en TODOS los idiomas, no solo el base
         DataDictionary rootDict = data.DataDictionary;
-        HashSet<string> allJsonKeys = new HashSet<string>();
-
-        DataList langs = rootDict.GetKeys();
-        for (int l = 0; l < langs.Count; l++)
-        {
-            if (rootDict.TryGetValue(langs[l].String, out DataToken langToken) &&
-                langToken.TokenType == TokenType.DataDictionary)
-            {
-                DataList keys = langToken.DataDictionary.GetKeys();
-                for (int k = 0; k < keys.Count; k++)
-                {
-                    allJsonKeys.Add(keys[k].String);
-                }
-            }
-        }
+        string baseLanguage = _baseLanguage.stringValue;
+        if (!rootDict.TryGetValue(baseLanguage, out DataToken languageToken) ||
+            languageToken.TokenType != TokenType.DataDictionary)
+            return;
+        DataDictionary baseEntries = languageToken.DataDictionary;
 
         for (int i = 0; i < _scanResults.Count; i++)
         {
             ScanEntry entry = _scanResults[i];
-            entry.existsInJson = allJsonKeys.Contains(entry.generatedKey);
+            entry.existsInJson =
+                baseEntries.TryGetValue(
+                    entry.generatedKey, out DataToken storedText) &&
+                storedText.TokenType == TokenType.String &&
+                storedText.String == entry.currentText;
             _scanResults[i] = entry;
         }
     }
@@ -932,7 +925,8 @@ public class CanvasLocalizerEditor : Editor
             // Separar automaticamente una clave compartida si solo este texto cambio.
             if (baseEntries != null && baseEntries.ContainsKey(entry.generatedKey) &&
                 baseEntries[entry.generatedKey] != entry.currentText &&
-                CountSceneKeyReferences(entry.generatedKey) > 1)
+                IdiomasEditorUtils.CountSceneTranslationKeyReferences(
+                    entry.generatedKey) > 1)
             {
                 entry.generatedKey = GenerateDetachedKey(entry.generatedKey, baseEntries);
                 entry.existsInJson = false;
@@ -952,24 +946,6 @@ public class CanvasLocalizerEditor : Editor
         }
     }
 
-    private static int CountSceneKeyReferences(string key)
-    {
-        int count = 0;
-        CanvasLocalizer[] localizers = Object.FindObjectsByType<CanvasLocalizer>(
-            FindObjectsInactive.Include, FindObjectsSortMode.None);
-        for (int i = 0; i < localizers.Length; i++)
-        {
-            SerializedObject so = new SerializedObject(localizers[i]);
-            SerializedProperty tmpKeys = so.FindProperty("tmpKeys");
-            SerializedProperty legacyKeys = so.FindProperty("legacyKeys");
-            for (int k = 0; tmpKeys != null && k < tmpKeys.arraySize; k++)
-                if (tmpKeys.GetArrayElementAtIndex(k).stringValue == key) count++;
-            for (int k = 0; legacyKeys != null && k < legacyKeys.arraySize; k++)
-                if (legacyKeys.GetArrayElementAtIndex(k).stringValue == key) count++;
-        }
-        return count;
-    }
-
     private string GenerateDetachedKey(string originalKey,
         Dictionary<string, string> baseEntries)
     {
@@ -979,7 +955,8 @@ public class CanvasLocalizerEditor : Editor
 
         int suffix = 2;
         string candidate = originalKey + "_" + suffix;
-        while (used.Contains(candidate))
+        while (used.Contains(candidate) ||
+            IdiomasEditorUtils.CountSceneTranslationKeyReferences(candidate) > 0)
         {
             suffix++;
             candidate = originalKey + "_" + suffix;

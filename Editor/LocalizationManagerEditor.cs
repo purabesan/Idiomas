@@ -47,6 +47,7 @@ public class LocalizationManagerEditor : Editor
     private static List<CanvasSearchResult> _canvasSearchResults;
     private static List<InteractionSearchResult> _interactionSearchResults;
     private static int _interactionDetectedObjectCount;
+    private static int _interactionRegisteredObjectCount;
     private static readonly Dictionary<int, bool> _interactionCandidateFoldouts =
         new Dictionary<int, bool>();
     private int _quickSetupLangIndex = 0; // Default: "en" (indice en IdiomasLanguages.Codes)
@@ -114,6 +115,7 @@ public class LocalizationManagerEditor : Editor
         _canvasSearchResults = null;
         _interactionSearchResults = null;
         _interactionDetectedObjectCount = 0;
+        _interactionRegisteredObjectCount = 0;
     }
 
     private void MigrateLegacyExcludedKeywords()
@@ -732,6 +734,20 @@ public class LocalizationManagerEditor : Editor
         public InteractionTextType type;
         public SerializedProperty key;
         public SerializedProperty enabled;
+        public string text;
+    }
+
+    private enum InteractionJsonState
+    {
+        Clean,
+        Modified,
+        Missing
+    }
+
+    private class RegisteredCanvasEntry
+    {
+        public SerializedProperty key;
+        public string text;
     }
 
     private void DrawInteractionLocalizerList(InteractionLocalizer localizer)
@@ -742,6 +758,10 @@ public class LocalizationManagerEditor : Editor
         EnsureInteractionEnabledArrays(localizerSO);
         Dictionary<GameObject, List<RegisteredInteractionEntry>> groups =
             BuildRegisteredInteractionGroups(localizerSO);
+        Dictionary<string, string> baseEntries =
+            GetInteractionBaseLanguageEntries(localizer);
+        int totalModified = 0;
+        int totalMissing = 0;
 
         EditorGUILayout.LabelField(
             S("mgr_already_localized"), EditorStyles.boldLabel);
@@ -756,15 +776,25 @@ public class LocalizationManagerEditor : Editor
                 expanded = false;
             }
 
-            List<string> enabledKeys = new List<string>();
             int excluded = 0;
+            int clean = 0;
+            int modified = 0;
+            int missing = 0;
             for (int i = 0; i < entries.Count; i++)
             {
                 if (entries[i].enabled.boolValue)
-                    enabledKeys.Add(entries[i].key.stringValue);
+                {
+                    InteractionJsonState state =
+                        GetInteractionJsonState(entries[i], baseEntries);
+                    if (state == InteractionJsonState.Clean) clean++;
+                    else if (state == InteractionJsonState.Modified) modified++;
+                    else missing++;
+                }
                 else
                     excluded++;
             }
+            totalModified += modified;
+            totalMissing += missing;
 
             EditorGUILayout.BeginVertical(EditorStyles.helpBox);
             EditorGUILayout.BeginHorizontal();
@@ -777,9 +807,9 @@ public class LocalizationManagerEditor : Editor
                 GUILayout.Width(150));
             GUILayout.FlexibleSpace();
             EditorGUILayout.LabelField(
-                $"JSON {CountKeysInJson(enabledKeys)}/{enabledKeys.Count}",
+                $"JSON ✓ {clean}  △ {modified}  ! {missing}",
                 EditorStyles.miniBoldLabel,
-                GUILayout.Width(90));
+                GUILayout.Width(150));
             EditorGUILayout.EndHorizontal();
             EditorGUILayout.LabelField(
                 GetInteractionHierarchyPath(owner.transform),
@@ -808,6 +838,28 @@ public class LocalizationManagerEditor : Editor
 
         if (localizerSO.ApplyModifiedProperties())
             EditorUtility.SetDirty(localizer);
+
+        if (totalModified > 0 || totalMissing > 0)
+        {
+            EditorGUILayout.HelpBox(
+                $"JSON: Modified {totalModified}, Missing {totalMissing}",
+                MessageType.Warning);
+        }
+    }
+
+    private static InteractionJsonState GetInteractionJsonState(
+        RegisteredInteractionEntry entry,
+        Dictionary<string, string> baseEntries)
+    {
+        string key = entry.key.stringValue;
+        if (string.IsNullOrWhiteSpace(key) ||
+            !baseEntries.TryGetValue(key, out string jsonText))
+        {
+            return InteractionJsonState.Missing;
+        }
+        return string.Equals(jsonText, entry.text, System.StringComparison.Ordinal)
+            ? InteractionJsonState.Clean
+            : InteractionJsonState.Modified;
     }
 
     private static void EnsureInteractionEnabledArrays(
@@ -895,9 +947,30 @@ public class LocalizationManagerEditor : Editor
                 target = targetObject,
                 type = type,
                 key = keys.GetArrayElementAtIndex(i),
-                enabled = enabled.GetArrayElementAtIndex(i)
+                enabled = enabled.GetArrayElementAtIndex(i),
+                text = GetRegisteredInteractionText(targetObject, type)
             });
         }
+    }
+
+    private static string GetRegisteredInteractionText(
+        Object targetObject, InteractionTextType type)
+    {
+        if (type == InteractionTextType.UdonInteraction)
+        {
+            UdonSharpBehaviour behaviour =
+                targetObject as UdonSharpBehaviour;
+            UdonBehaviour backing = behaviour != null
+                ? IdiomasEditorUtils.FindUdonBehaviourFor(behaviour)
+                : null;
+            return backing != null ? backing.InteractionText : "";
+        }
+
+        VRCPickup pickup = targetObject as VRCPickup;
+        if (pickup == null) return "";
+        return type == InteractionTextType.PickupUse
+            ? pickup.UseText
+            : pickup.InteractionText;
     }
 
     private List<InteractionLocalizer> GetRegisteredInteractionLocalizers()
@@ -1076,6 +1149,7 @@ public class LocalizationManagerEditor : Editor
     {
         _interactionSearchResults = new List<InteractionSearchResult>();
         HashSet<GameObject> detectedObjects = new HashSet<GameObject>();
+        HashSet<GameObject> registeredObjects = new HashSet<GameObject>();
         HashSet<string> usedKeys = new HashSet<string>();
         string[] excludedKeywords = ParseQuickSetupExcludedKeywords();
         if (_cachedKeys != null)
@@ -1126,6 +1200,7 @@ public class LocalizationManagerEditor : Editor
             if (IsInteractionTargetRegistered(
                 behaviour, InteractionTextType.UdonInteraction))
             {
+                registeredObjects.Add(behaviour.gameObject);
                 continue;
             }
 
@@ -1164,6 +1239,10 @@ public class LocalizationManagerEditor : Editor
                         !ContainsExcludedKeyword(
                             pickup.InteractionText, excludedKeywords));
                 }
+                else
+                {
+                    registeredObjects.Add(pickup.gameObject);
+                }
             }
             if (!string.IsNullOrWhiteSpace(pickup.UseText) &&
                 (_includeDefaultUseText.boolValue || pickup.UseText != "Use"))
@@ -1181,9 +1260,14 @@ public class LocalizationManagerEditor : Editor
                         !ContainsExcludedKeyword(
                             pickup.UseText, excludedKeywords));
                 }
+                else
+                {
+                    registeredObjects.Add(pickup.gameObject);
+                }
             }
         }
         _interactionDetectedObjectCount = detectedObjects.Count;
+        _interactionRegisteredObjectCount = registeredObjects.Count;
     }
 
     private static void AddAllStringArrayValues(
@@ -1716,6 +1800,7 @@ public class LocalizationManagerEditor : Editor
             _canvasSearchResults = null;
             _interactionSearchResults = null;
             _interactionDetectedObjectCount = 0;
+            _interactionRegisteredObjectCount = 0;
         }
 
         EditorGUILayout.Space(5);
@@ -1937,6 +2022,7 @@ public class LocalizationManagerEditor : Editor
             {
                 _interactionSearchResults = null;
                 _interactionDetectedObjectCount = 0;
+                _interactionRegisteredObjectCount = 0;
             }
         }
         GUI.backgroundColor = Color.white;
@@ -2013,7 +2099,7 @@ public class LocalizationManagerEditor : Editor
         }
 
         if (_canvasSearchResults.Count == 0 &&
-            (_interactionSearchResults == null || _interactionSearchResults.Count == 0))
+            _interactionDetectedObjectCount == 0)
         {
             EditorGUILayout.HelpBox(S("mgr_no_canvas"), MessageType.Info);
             return;
@@ -2030,14 +2116,19 @@ public class LocalizationManagerEditor : Editor
             else candidates++;
         }
 
-        if (_canvasSearchResults.Count > 0)
+        if (_canvasSearchResults.Count > 0 ||
+            _interactionDetectedObjectCount > 0)
         {
+            int interactionCandidates =
+                CountIncludedInteractionObjects();
             EditorGUILayout.LabelField(
                 string.Format(
                     S("mgr_found_summary"),
                     _canvasSearchResults.Count,
-                    candidates,
-                    alreadyLocalized,
+                    _interactionDetectedObjectCount,
+                    candidates + interactionCandidates,
+                    alreadyLocalized +
+                        _interactionRegisteredObjectCount,
                     noTexts),
                 EditorStyles.helpBox);
         }
@@ -2136,6 +2227,33 @@ public class LocalizationManagerEditor : Editor
             List<string> clKeys = GetCanvasLocalizerKeys(cl);
             int keysInJson = CountKeysInJson(clKeys);
             int totalKeys = clKeys.Count;
+            List<string> deletableKeys =
+                GetDeletableCanvasKeys(cl, clKeys);
+            int deletableKeyCount = deletableKeys.Count;
+            Dictionary<string, string> canvasBaseEntries =
+                GetCanvasBaseLanguageEntries(cl);
+            List<RegisteredCanvasEntry> canvasEntries =
+                BuildRegisteredCanvasEntries(new SerializedObject(cl));
+            int cleanEntries = 0;
+            int modifiedEntries = 0;
+            int missingEntries = 0;
+            for (int e = 0; e < canvasEntries.Count; e++)
+            {
+                string key = canvasEntries[e].key.stringValue;
+                if (!canvasBaseEntries.TryGetValue(
+                    key, out string storedText))
+                {
+                    missingEntries++;
+                }
+                else if (storedText == canvasEntries[e].text)
+                {
+                    cleanEntries++;
+                }
+                else
+                {
+                    modifiedEntries++;
+                }
+            }
 
             EditorGUILayout.BeginVertical(EditorStyles.helpBox);
 
@@ -2162,20 +2280,18 @@ public class LocalizationManagerEditor : Editor
                 jsonStatusStyle.normal.textColor = new Color(0.8f, 0.5f, 0.0f);
                 jsonStatusText = S("mgr_no_keys");
             }
-            else if (keysInJson == 0)
+            else if (modifiedEntries > 0 || missingEntries > 0)
             {
-                jsonStatusStyle.normal.textColor = new Color(0.9f, 0.3f, 0.0f);
-                jsonStatusText = string.Format(S("mgr_json_not_exported"), totalKeys);
-            }
-            else if (keysInJson < totalKeys)
-            {
-                jsonStatusStyle.normal.textColor = new Color(0.8f, 0.7f, 0.0f);
-                jsonStatusText = string.Format(S("mgr_json_partial"), keysInJson, totalKeys);
+                jsonStatusStyle.normal.textColor =
+                    new Color(0.8f, 0.5f, 0.0f);
+                jsonStatusText =
+                    $"JSON ✓ {cleanEntries}  △ {modifiedEntries}  ! {missingEntries}";
             }
             else
             {
                 jsonStatusStyle.normal.textColor = new Color(0.2f, 0.7f, 0.2f);
-                jsonStatusText = string.Format(S("mgr_json_complete"), keysInJson, totalKeys);
+                jsonStatusText =
+                    $"JSON ✓ {cleanEntries}  △ 0  ! 0";
             }
             EditorGUILayout.LabelField(jsonStatusText, jsonStatusStyle, GUILayout.Width(160));
 
@@ -2186,7 +2302,7 @@ public class LocalizationManagerEditor : Editor
             GUILayout.FlexibleSpace();
 
             // Boton para restaurar claves faltantes al JSON
-            int missingKeys = totalKeys - keysInJson;
+            int missingKeys = missingEntries + modifiedEntries;
             EditorGUI.BeginDisabledGroup(missingKeys == 0);
             GUI.backgroundColor = new Color(0.3f, 0.8f, 0.5f);
             if (GUILayout.Button(string.Format(S("mgr_restore_json"), missingKeys), GUILayout.Width(140)))
@@ -2197,11 +2313,16 @@ public class LocalizationManagerEditor : Editor
             EditorGUI.EndDisabledGroup();
 
             // Boton para limpiar claves del JSON
-            EditorGUI.BeginDisabledGroup(keysInJson == 0);
+            EditorGUI.BeginDisabledGroup(
+                missingKeys > 0 || deletableKeyCount == 0);
             GUI.backgroundColor = new Color(1f, 0.7f, 0.3f);
-            if (GUILayout.Button(string.Format(S("mgr_clean_json"), keysInJson), GUILayout.Width(130)))
+            if (GUILayout.Button(
+                string.Format(
+                    S("mgr_clean_json"), deletableKeyCount),
+                GUILayout.Width(130)))
             {
-                RemoveKeysFromJson(cl, clKeys, keysInJson);
+                RemoveKeysFromJson(
+                    cl, deletableKeys, deletableKeyCount);
             }
             GUI.backgroundColor = Color.white;
             EditorGUI.EndDisabledGroup();
@@ -2249,7 +2370,7 @@ public class LocalizationManagerEditor : Editor
         {
             _showInteractionResults = EditorGUILayout.Foldout(
                 _showInteractionResults,
-                $"InteractionText ({_interactionDetectedObjectCount})",
+                $"Interaction ({_interactionDetectedObjectCount})",
                 true);
             if (_showInteractionResults)
             {
@@ -2443,25 +2564,43 @@ public class LocalizationManagerEditor : Editor
     /// </summary>
     private bool IsTranslationKeyUsedElsewhere(string key, CanvasLocalizer excludedLocalizer)
     {
-        for (int i = 0; i < _canvasLocalizers.arraySize; i++)
+        int referencesInExcludedLocalizer = 0;
+        if (excludedLocalizer != null)
         {
-            CanvasLocalizer other = _canvasLocalizers
-                .GetArrayElementAtIndex(i).objectReferenceValue as CanvasLocalizer;
-            if (other == null || other == excludedLocalizer) continue;
-
-            List<string> otherKeys = GetCanvasLocalizerKeys(other);
-            if (otherKeys.Contains(key)) return true;
+            SerializedObject localizerSO =
+                new SerializedObject(excludedLocalizer);
+            string[] keyArrays = { "tmpKeys", "legacyKeys" };
+            for (int a = 0; a < keyArrays.Length; a++)
+            {
+                SerializedProperty keys =
+                    localizerSO.FindProperty(keyArrays[a]);
+                if (keys == null) continue;
+                for (int i = 0; i < keys.arraySize; i++)
+                {
+                    if (keys.GetArrayElementAtIndex(i).stringValue == key)
+                        referencesInExcludedLocalizer++;
+                }
+            }
         }
 
-        for (int i = 0; i < _localizers.arraySize; i++)
-        {
-            TextLocalizer textLocalizer = _localizers
-                .GetArrayElementAtIndex(i).objectReferenceValue as TextLocalizer;
-            if (textLocalizer != null && textLocalizer.GetTranslationKey() == key)
-                return true;
-        }
+        return IdiomasEditorUtils.CountSceneTranslationKeyReferences(key) >
+            referencesInExcludedLocalizer;
+    }
 
-        return false;
+    private List<string> GetDeletableCanvasKeys(
+        CanvasLocalizer localizer, List<string> keys)
+    {
+        List<string> deletable = new List<string>();
+        for (int i = 0; i < keys.Count; i++)
+        {
+            List<string> singleKey = new List<string> { keys[i] };
+            if (CountKeysInJson(singleKey) > 0 &&
+                !IsTranslationKeyUsedElsewhere(keys[i], localizer))
+            {
+                deletable.Add(keys[i]);
+            }
+        }
+        return deletable;
     }
 
     private void RemoveKeysFromJson(CanvasLocalizer cl, List<string> keys, int keysInJson)
@@ -2559,9 +2698,8 @@ public class LocalizationManagerEditor : Editor
     // =====================================================================
 
     /// <summary>
-    /// Restaura al JSON las claves de un CanvasLocalizer que faltan.
-    /// Lee el texto actual de los componentes referenciados y lo escribe
-    /// bajo el baseLanguage del canvas. No sobreescribe claves existentes.
+    /// Restaura las claves que faltan y sincroniza los textos modificados.
+    /// Las claves compartidas se separan antes de actualizar el idioma base.
     /// </summary>
     private void RestoreKeysToJson(CanvasLocalizer cl, List<string> allKeys)
     {
@@ -2594,23 +2732,7 @@ public class LocalizationManagerEditor : Editor
             return;
         }
 
-        if (!translations.ContainsKey(baseLang))
-            translations[baseLang] = new Dictionary<string, string>();
-
-        // Construir mapa clave -> texto actual desde los arrays del CanvasLocalizer
-        Dictionary<string, string> keyTextMap = BuildKeyTextMap(cl);
-
-        // Agregar solo las claves que faltan
-        int added = 0;
-        for (int i = 0; i < allKeys.Count; i++)
-        {
-            string key = allKeys[i];
-            if (translations[baseLang].ContainsKey(key)) continue;
-            if (!keyTextMap.ContainsKey(key)) continue;
-
-            translations[baseLang][key] = keyTextMap[key];
-            added++;
-        }
+        int added = SyncCanvasLocalizerToJson(cl, translations);
 
         if (added == 0)
         {
@@ -2625,6 +2747,7 @@ public class LocalizationManagerEditor : Editor
         AssetDatabase.Refresh();
 
         _cachedJsonHash = null;
+        ((LocalizationManager)target).ApplyToAll();
 
         string canvasId = cl.GetCanvasId();
         Debug.Log($"[Idiomas] Restauradas {added} claves al JSON (canvas \"{canvasId}\", idioma \"{baseLang}\").");
@@ -2671,6 +2794,325 @@ public class LocalizationManagerEditor : Editor
         }
 
         return map;
+    }
+
+    private static List<RegisteredCanvasEntry> BuildRegisteredCanvasEntries(
+        SerializedObject localizerSO)
+    {
+        List<RegisteredCanvasEntry> entries =
+            new List<RegisteredCanvasEntry>();
+        AddRegisteredCanvasEntries(
+            localizerSO.FindProperty("tmpTexts"),
+            localizerSO.FindProperty("tmpKeys"),
+            entries);
+        AddRegisteredCanvasEntries(
+            localizerSO.FindProperty("legacyTexts"),
+            localizerSO.FindProperty("legacyKeys"),
+            entries);
+        return entries;
+    }
+
+    private static void AddRegisteredCanvasEntries(
+        SerializedProperty texts,
+        SerializedProperty keys,
+        List<RegisteredCanvasEntry> entries)
+    {
+        if (texts == null || keys == null) return;
+        int count = Mathf.Min(texts.arraySize, keys.arraySize);
+        for (int i = 0; i < count; i++)
+        {
+            Component component =
+                texts.GetArrayElementAtIndex(i).objectReferenceValue
+                as Component;
+            string text = "";
+            if (component is TextMeshProUGUI tmp) text = tmp.text;
+            else if (component is Text legacy) text = legacy.text;
+            if (component == null || string.IsNullOrWhiteSpace(text)) continue;
+            entries.Add(new RegisteredCanvasEntry
+            {
+                key = keys.GetArrayElementAtIndex(i),
+                text = text
+            });
+        }
+    }
+
+    private int SyncCanvasLocalizerToJson(
+        CanvasLocalizer localizer,
+        Dictionary<string, Dictionary<string, string>> translations)
+    {
+        if (localizer == null || translations == null) return 0;
+        string baseLanguage = localizer.GetBaseLanguage();
+        if (string.IsNullOrEmpty(baseLanguage)) return 0;
+        if (!translations.ContainsKey(baseLanguage))
+            translations[baseLanguage] = new Dictionary<string, string>();
+        Dictionary<string, string> baseEntries = translations[baseLanguage];
+
+        SerializedObject localizerSO = new SerializedObject(localizer);
+        List<RegisteredCanvasEntry> entries =
+            BuildRegisteredCanvasEntries(localizerSO);
+        Dictionary<string, string> canonicalByText =
+            new Dictionary<string, string>(System.StringComparer.Ordinal);
+        HashSet<string> reservedKeys =
+            new HashSet<string>(baseEntries.Keys);
+        for (int i = 0; i < entries.Count; i++)
+        {
+            string key = entries[i].key.stringValue;
+            if (!string.IsNullOrWhiteSpace(key)) reservedKeys.Add(key);
+        }
+        foreach (KeyValuePair<string, string> pair in baseEntries)
+        {
+            if (!string.IsNullOrEmpty(pair.Value) &&
+                !canonicalByText.ContainsKey(pair.Value))
+            {
+                canonicalByText[pair.Value] = pair.Key;
+            }
+        }
+
+        Dictionary<string, int> referenceCounts =
+            new Dictionary<string, int>();
+        int updated = 0;
+        int reassigned = 0;
+        for (int i = 0; i < entries.Count; i++)
+        {
+            RegisteredCanvasEntry entry = entries[i];
+            string oldKey = entry.key.stringValue;
+            string key = oldKey;
+            if (canonicalByText.TryGetValue(
+                entry.text, out string canonicalKey))
+            {
+                key = canonicalKey;
+            }
+            else if (!string.IsNullOrWhiteSpace(oldKey) &&
+                baseEntries.TryGetValue(oldKey, out string storedText) &&
+                storedText != entry.text &&
+                GetInteractionReferenceCount(referenceCounts, oldKey) > 1)
+            {
+                key = GenerateInteractionDetachedKey(
+                    oldKey, reservedKeys, referenceCounts);
+            }
+            else if (string.IsNullOrWhiteSpace(key))
+            {
+                key = GenerateInteractionDetachedKey(
+                    "canvas_text", reservedKeys, referenceCounts);
+            }
+
+            if (key != oldKey)
+            {
+                if (!string.IsNullOrWhiteSpace(oldKey))
+                {
+                    referenceCounts[oldKey] = Mathf.Max(
+                        0,
+                        GetInteractionReferenceCount(
+                            referenceCounts, oldKey) - 1);
+                }
+                referenceCounts[key] =
+                    GetInteractionReferenceCount(referenceCounts, key) + 1;
+                entry.key.stringValue = key;
+                reassigned++;
+            }
+
+            reservedKeys.Add(key);
+            canonicalByText[entry.text] = key;
+            if (!baseEntries.TryGetValue(key, out string current) ||
+                current != entry.text)
+            {
+                baseEntries[key] = entry.text;
+                updated++;
+            }
+        }
+
+        localizerSO.ApplyModifiedProperties();
+        EditorUtility.SetDirty(localizer);
+        return updated + reassigned;
+    }
+
+    /// <summary>
+    /// Obtiene las entradas del idioma base para comprobar su sincronizacion.
+    /// </summary>
+    private Dictionary<string, string> GetInteractionBaseLanguageEntries(
+        InteractionLocalizer localizer)
+    {
+        TextAsset textAsset = _translationFile.objectReferenceValue as TextAsset;
+        if (textAsset == null || localizer == null)
+            return new Dictionary<string, string>();
+
+        string path = AssetDatabase.GetAssetPath(textAsset);
+        if (string.IsNullOrEmpty(path))
+            return new Dictionary<string, string>();
+
+        var translations = IdiomasEditorUtils.ParseJsonToDictionary(
+            File.ReadAllText(Path.GetFullPath(path), Encoding.UTF8));
+        string baseLanguage = localizer.GetBaseLanguage();
+        if (translations != null &&
+            translations.TryGetValue(
+                baseLanguage, out Dictionary<string, string> entries))
+        {
+            return entries;
+        }
+        return new Dictionary<string, string>();
+    }
+
+    private Dictionary<string, string> GetCanvasBaseLanguageEntries(
+        CanvasLocalizer localizer)
+    {
+        TextAsset textAsset = _translationFile.objectReferenceValue as TextAsset;
+        if (textAsset == null || localizer == null)
+            return new Dictionary<string, string>();
+        string path = AssetDatabase.GetAssetPath(textAsset);
+        if (string.IsNullOrEmpty(path))
+            return new Dictionary<string, string>();
+        var translations = IdiomasEditorUtils.ParseJsonToDictionary(
+            File.ReadAllText(Path.GetFullPath(path), Encoding.UTF8));
+        string baseLanguage = localizer.GetBaseLanguage();
+        if (translations != null &&
+            translations.TryGetValue(
+                baseLanguage, out Dictionary<string, string> entries))
+        {
+            return entries;
+        }
+        return new Dictionary<string, string>();
+    }
+
+    /// <summary>
+    /// Sincroniza los textos registrados con el idioma base sin modificar
+    /// una clave compartida por otros componentes.
+    /// </summary>
+    private int SyncInteractionLocalizerToJson(
+        InteractionLocalizer localizer,
+        Dictionary<string, Dictionary<string, string>> translations)
+    {
+        if (localizer == null || translations == null) return 0;
+
+        string baseLanguage = localizer.GetBaseLanguage();
+        if (string.IsNullOrEmpty(baseLanguage)) return 0;
+        if (!translations.ContainsKey(baseLanguage))
+            translations[baseLanguage] = new Dictionary<string, string>();
+        Dictionary<string, string> baseEntries = translations[baseLanguage];
+
+        SerializedObject localizerSO = new SerializedObject(localizer);
+        EnsureInteractionEnabledArrays(localizerSO);
+        Dictionary<GameObject, List<RegisteredInteractionEntry>> groups =
+            BuildRegisteredInteractionGroups(localizerSO);
+        List<RegisteredInteractionEntry> entries =
+            new List<RegisteredInteractionEntry>();
+        foreach (var pair in groups)
+            entries.AddRange(pair.Value);
+
+        Dictionary<string, string> canonicalByText =
+            new Dictionary<string, string>(System.StringComparer.Ordinal);
+        HashSet<string> reservedKeys =
+            new HashSet<string>(baseEntries.Keys);
+        for (int i = 0; i < entries.Count; i++)
+        {
+            string key = entries[i].key.stringValue;
+            if (!string.IsNullOrWhiteSpace(key)) reservedKeys.Add(key);
+        }
+        foreach (KeyValuePair<string, string> pair in baseEntries)
+        {
+            if (!string.IsNullOrEmpty(pair.Value) &&
+                !canonicalByText.ContainsKey(pair.Value))
+            {
+                canonicalByText[pair.Value] = pair.Key;
+            }
+        }
+
+        Dictionary<string, int> referenceCounts =
+            new Dictionary<string, int>();
+        int updated = 0;
+        int reassigned = 0;
+        for (int i = 0; i < entries.Count; i++)
+        {
+            RegisteredInteractionEntry entry = entries[i];
+            if (!entry.enabled.boolValue ||
+                string.IsNullOrWhiteSpace(entry.text))
+            {
+                continue;
+            }
+
+            string oldKey = entry.key.stringValue;
+            string key = oldKey;
+            if (canonicalByText.TryGetValue(
+                entry.text, out string canonicalKey))
+            {
+                key = canonicalKey;
+            }
+            else if (!string.IsNullOrWhiteSpace(oldKey) &&
+                baseEntries.TryGetValue(oldKey, out string storedText) &&
+                storedText != entry.text &&
+                GetInteractionReferenceCount(referenceCounts, oldKey) > 1)
+            {
+                key = GenerateInteractionDetachedKey(
+                    oldKey, reservedKeys, referenceCounts);
+            }
+            else if (string.IsNullOrWhiteSpace(key))
+            {
+                key = GenerateInteractionDetachedKey(
+                    "interaction", reservedKeys, referenceCounts);
+            }
+
+            if (key != oldKey)
+            {
+                if (!string.IsNullOrWhiteSpace(oldKey))
+                {
+                    referenceCounts[oldKey] = Mathf.Max(
+                        0,
+                        GetInteractionReferenceCount(
+                            referenceCounts, oldKey) - 1);
+                }
+                referenceCounts[key] =
+                    GetInteractionReferenceCount(referenceCounts, key) + 1;
+                entry.key.stringValue = key;
+                reassigned++;
+            }
+
+            reservedKeys.Add(key);
+            canonicalByText[entry.text] = key;
+            if (!baseEntries.TryGetValue(key, out string current) ||
+                current != entry.text)
+            {
+                baseEntries[key] = entry.text;
+                updated++;
+            }
+        }
+
+        localizerSO.ApplyModifiedProperties();
+        EditorUtility.SetDirty(localizer);
+        Debug.Log(
+            $"[Idiomas] Interaction Text sincronizado: {updated} claves, " +
+            $"{reassigned} reasignadas, " +
+            $"idioma base \"{baseLanguage}\".");
+        return updated + reassigned;
+    }
+
+    private static int GetInteractionReferenceCount(
+        Dictionary<string, int> referenceCounts, string key)
+    {
+        if (!referenceCounts.TryGetValue(key, out int count))
+        {
+            count =
+                IdiomasEditorUtils.CountSceneTranslationKeyReferences(key);
+            referenceCounts[key] = count;
+        }
+        return count;
+    }
+
+    private static string GenerateInteractionDetachedKey(
+        string originalKey,
+        HashSet<string> reservedKeys,
+        Dictionary<string, int> referenceCounts)
+    {
+        string stem = string.IsNullOrWhiteSpace(originalKey)
+            ? "interaction"
+            : originalKey;
+        int suffix = 2;
+        string candidate = stem + "_" + suffix;
+        while (reservedKeys.Contains(candidate) ||
+            GetInteractionReferenceCount(referenceCounts, candidate) > 0)
+        {
+            suffix++;
+            candidate = stem + "_" + suffix;
+        }
+        return candidate;
     }
 
     /// <summary>
@@ -2825,12 +3267,12 @@ public class LocalizationManagerEditor : Editor
     }
 
     // =====================================================================
-    // Restaurar JSON Faltantes (global - todos los CanvasLocalizer)
+    // Restaurar JSON Faltantes (global - todos los Localizer)
     // =====================================================================
 
     /// <summary>
-    /// Restaura al JSON las claves faltantes de TODOS los CanvasLocalizer de la escena.
-    /// Solo agrega claves que no existan; no sobreescribe las existentes.
+    /// Restaura las claves faltantes de todos los Localizer y sincroniza
+    /// los Interaction Text modificados con el idioma base.
     /// </summary>
     private void RestoreAllKeysToJson()
     {
@@ -2884,45 +3326,18 @@ public class LocalizationManagerEditor : Editor
         for (int c = 0; c < localizers.Count; c++)
         {
             CanvasLocalizer cl = localizers[c];
-            string baseLang = cl.GetBaseLanguage();
-            if (string.IsNullOrEmpty(baseLang)) continue;
-
-            if (!translations.ContainsKey(baseLang))
-                translations[baseLang] = new Dictionary<string, string>();
-
-            List<string> clKeys = GetCanvasLocalizerKeys(cl);
-            Dictionary<string, string> keyTextMap = BuildKeyTextMap(cl);
-
-            int added = 0;
-            for (int i = 0; i < clKeys.Count; i++)
-            {
-                string key = clKeys[i];
-                if (translations[baseLang].ContainsKey(key)) continue;
-                if (!keyTextMap.ContainsKey(key)) continue;
-
-                translations[baseLang][key] = keyTextMap[key];
-                added++;
-            }
-
-            if (added > 0) canvasProcessed++;
-            totalAdded += added;
+            int synchronized = SyncCanvasLocalizerToJson(cl, translations);
+            if (synchronized > 0) canvasProcessed++;
+            totalAdded += synchronized;
         }
 
         for (int i = 0; i < interactionLocalizers.Count; i++)
         {
             InteractionLocalizer localizer = interactionLocalizers[i];
-            string baseLang = localizer.GetBaseLanguage();
-            if (string.IsNullOrEmpty(baseLang)) continue;
-            if (!translations.ContainsKey(baseLang))
-                translations[baseLang] = new Dictionary<string, string>();
-
-            List<string> keys = GetInteractionLocalizerKeys(localizer);
-            int added = AddMissingKeys(
-                translations[baseLang],
-                keys,
-                BuildInteractionKeyTextMap(localizer));
-            if (added > 0) canvasProcessed++;
-            totalAdded += added;
+            int synchronized = SyncInteractionLocalizerToJson(
+                localizer, translations);
+            if (synchronized > 0) canvasProcessed++;
+            totalAdded += synchronized;
         }
 
         if (totalAdded == 0)
@@ -2937,6 +3352,7 @@ public class LocalizationManagerEditor : Editor
         AssetDatabase.Refresh();
 
         _cachedJsonHash = null;
+        ((LocalizationManager)target).ApplyToAll();
 
         int totalLocalizers = localizers.Count + interactionLocalizers.Count;
         Debug.Log(
