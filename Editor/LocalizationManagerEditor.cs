@@ -48,8 +48,6 @@ public class LocalizationManagerEditor : Editor
     private static List<InteractionSearchResult> _interactionSearchResults;
     private static int _interactionDetectedObjectCount;
     private static int _interactionRegisteredObjectCount;
-    private static readonly Dictionary<int, bool> _interactionCandidateFoldouts =
-        new Dictionary<int, bool>();
     private int _quickSetupLangIndex = 0; // Default: "en" (indice en IdiomasLanguages.Codes)
 
     // Cache del JSON
@@ -461,25 +459,146 @@ public class LocalizationManagerEditor : Editor
             List<InteractionSearchResult> results = pair.Value;
 
             EditorGUILayout.BeginVertical(EditorStyles.helpBox);
-            EditorGUILayout.BeginHorizontal();
-            GUIStyle linkStyle = new GUIStyle(EditorStyles.label);
-            linkStyle.fontStyle = FontStyle.Bold;
-            linkStyle.normal.textColor = new Color(0.3f, 0.6f, 1f);
-            if (GUILayout.Button(
-                owner.name, linkStyle, GUILayout.ExpandWidth(false)))
-            {
-                EditorGUIUtility.PingObject(owner);
-            }
-            EditorGUILayout.LabelField(
-                $"{results.Count} Interaction Text",
-                EditorStyles.miniLabel,
-                GUILayout.Width(130));
-            EditorGUILayout.EndHorizontal();
+            DrawInteractionSearchHeader(owner, results.Count);
 
-            EditorGUILayout.LabelField(
-                results[0].hierarchyPath, EditorStyles.miniLabel);
             EditorGUILayout.EndVertical();
         }
+    }
+
+    private static GUIStyle CreateInteractionLinkStyle(bool bold)
+    {
+        GUIStyle style = new GUIStyle(EditorStyles.label);
+        style.fontStyle = bold ? FontStyle.Bold : FontStyle.Normal;
+        style.clipping = TextClipping.Clip;
+        style.normal.textColor = new Color(0.3f, 0.6f, 1f);
+        return style;
+    }
+
+    private static GUIStyle CreateRightAlignedStyle(GUIStyle source)
+    {
+        GUIStyle style = new GUIStyle(source);
+        style.alignment = TextAnchor.MiddleRight;
+        return style;
+    }
+
+    private void DrawInteractionSearchHeader(
+        GameObject owner, int textCount)
+    {
+        string countText =
+            string.Format(S("mgr_text_count"), textCount);
+        GUIStyle linkStyle = CreateInteractionLinkStyle(true);
+        GUIStyle countStyle =
+            CreateRightAlignedStyle(EditorStyles.miniLabel);
+        Rect row = EditorGUILayout.GetControlRect(
+            false, EditorGUIUtility.singleLineHeight);
+        float countWidth =
+            countStyle.CalcSize(new GUIContent(countText)).x;
+        Rect countRect = new Rect(
+            row.xMax - countWidth, row.y, countWidth, row.height);
+        Rect nameRect = new Rect(
+            row.x, row.y,
+            Mathf.Max(20f, countRect.x - row.x - 8f), row.height);
+
+        if (GUI.Button(
+            nameRect,
+            new GUIContent(
+                owner.name,
+                GetInteractionHierarchyPath(owner.transform)),
+            linkStyle))
+        {
+            EditorGUIUtility.PingObject(owner);
+        }
+        GUI.Label(countRect, countText, countStyle);
+    }
+
+    private void DrawInteractionLocalizerEditLink(
+        InteractionLocalizer localizer)
+    {
+        EditorGUILayout.Space(3);
+        Color previousBackgroundColor = GUI.backgroundColor;
+        GUI.backgroundColor = new Color(0.35f, 0.65f, 1f);
+        if (GUILayout.Button(
+            S("mgr_edit_interaction_localizer"),
+            GUILayout.Height(24)))
+        {
+            Selection.activeObject = localizer;
+            EditorGUIUtility.PingObject(localizer);
+        }
+        GUI.backgroundColor = previousBackgroundColor;
+    }
+
+    private static void DrawLocalizedObjectStatusRow(
+        GameObject owner,
+        string hierarchyPath,
+        string countText,
+        string jsonText,
+        bool hasJsonIssues,
+        GUIStyle linkStyle)
+    {
+        GUIStyle countStyle = new GUIStyle(EditorStyles.miniLabel);
+        GUIStyle jsonStyle = new GUIStyle(EditorStyles.miniLabel);
+        jsonStyle.fontStyle = FontStyle.Bold;
+        jsonStyle.normal.textColor = hasJsonIssues
+            ? new Color(0.8f, 0.5f, 0.0f)
+            : new Color(0.2f, 0.7f, 0.2f);
+
+        float statusWidth =
+            countStyle.CalcSize(new GUIContent(countText)).x +
+            countStyle.CalcSize(new GUIContent("|")).x +
+            jsonStyle.CalcSize(new GUIContent(jsonText)).x + 12f;
+        float availableWidth =
+            Mathf.Max(0f, EditorGUIUtility.currentViewWidth - 45f);
+        bool useTwoLines = availableWidth < statusWidth + 120f;
+
+        EditorGUILayout.BeginHorizontal();
+        if (GUILayout.Button(
+            new GUIContent(owner.name, hierarchyPath),
+            linkStyle,
+            GUILayout.MinWidth(60f),
+            GUILayout.ExpandWidth(true)))
+        {
+            EditorGUIUtility.PingObject(owner);
+        }
+        GUILayout.Label(
+            countText,
+            countStyle,
+            GUILayout.ExpandWidth(false));
+        if (!useTwoLines)
+        {
+            GUILayout.Label("|", countStyle, GUILayout.ExpandWidth(false));
+            GUILayout.Label(
+                jsonText,
+                jsonStyle,
+                GUILayout.ExpandWidth(false));
+        }
+        EditorGUILayout.EndHorizontal();
+
+        if (useTwoLines)
+        {
+            EditorGUILayout.BeginHorizontal();
+            GUILayout.FlexibleSpace();
+            GUILayout.Label(
+                jsonText,
+                jsonStyle,
+                GUILayout.ExpandWidth(false));
+            EditorGUILayout.EndHorizontal();
+        }
+    }
+
+    private void DrawRegisteredInteractionHeader(
+        GameObject owner,
+        string countText,
+        string jsonText,
+        bool hasJsonIssues)
+    {
+        GUIStyle linkStyle = CreateInteractionLinkStyle(false);
+        DrawLocalizedObjectStatusRow(
+            owner,
+            GetInteractionHierarchyPath(owner.transform),
+            countText,
+            jsonText,
+            hasJsonIssues,
+            linkStyle);
     }
 
     private void AddInteractionLocalizerTo(
@@ -492,16 +611,13 @@ public class LocalizationManagerEditor : Editor
         if (GetInteractionGroupTextCount(group) == 0) return;
 
         InteractionLocalizer localizer =
-            GetOrCreateCentralInteractionLocalizer(manager);
+            GetPrefabInteractionLocalizer(manager);
         if (localizer == null) return;
         AppendInteractionGroupToCentral(
             manager,
             localizer,
             group,
             IdiomasLanguages.Codes[_quickSetupLangIndex]);
-        RemoveNonCentralInteractionLocalizers(localizer);
-        SetRegisteredInteractionLocalizer(localizer);
-
         _interactionSearchResults.RemoveAll(result =>
         {
             Component component = result.target as Component;
@@ -672,62 +788,6 @@ public class LocalizationManagerEditor : Editor
             group.pickupUseKeys.Count;
     }
 
-    private InteractionLocalizer ConfigureInteractionLocalizerGroup(
-        LocalizationManager manager,
-        InteractionLocalizerGroup group,
-        string baseLang)
-    {
-        if (group == null || group.gameObject == null ||
-            GetInteractionGroupTextCount(group) == 0)
-        {
-            return null;
-        }
-
-        InteractionLocalizer localizer =
-            group.gameObject.GetComponent<InteractionLocalizer>();
-        if (localizer == null)
-        {
-            localizer = UdonSharpUndo.AddComponent<InteractionLocalizer>(
-                group.gameObject);
-        }
-        if (localizer == null) return null;
-
-        Undo.RecordObject(localizer, "Configure Interaction Localizer");
-        SerializedObject localizerSO = new SerializedObject(localizer);
-        localizerSO.FindProperty("manager").objectReferenceValue = manager;
-        localizerSO.FindProperty("baseLanguage").stringValue = baseLang;
-        SetObjectArray(
-            localizerSO.FindProperty("interactTargets"),
-            group.udonTargets);
-        SetStringArray(
-            localizerSO.FindProperty("interactKeys"), group.udonKeys);
-        SetBoolArray(
-            localizerSO.FindProperty("interactEnabled"),
-            group.udonEnabled,
-            group.udonKeys.Count);
-        SetObjectArray(
-            localizerSO.FindProperty("pickupInteractionTargets"),
-            group.pickupInteractionTargets);
-        SetStringArray(
-            localizerSO.FindProperty("pickupInteractionKeys"),
-            group.pickupInteractionKeys);
-        SetBoolArray(
-            localizerSO.FindProperty("pickupInteractionEnabled"),
-            group.pickupInteractionEnabled,
-            group.pickupInteractionKeys.Count);
-        SetObjectArray(
-            localizerSO.FindProperty("pickupUseTargets"),
-            group.pickupUseTargets);
-        SetStringArray(
-            localizerSO.FindProperty("pickupUseKeys"), group.pickupUseKeys);
-        localizerSO.ApplyModifiedProperties();
-        RegisterInteractionLocalizer(localizer);
-        EditorUtility.SetDirty(localizer);
-        EditorUtility.SetDirty(group.gameObject);
-        EditorUtility.SetDirty(manager);
-        return localizer;
-    }
-
     private class RegisteredInteractionEntry
     {
         public Object target;
@@ -744,8 +804,16 @@ public class LocalizationManagerEditor : Editor
         Missing
     }
 
+    private enum SourceTranslationUpdateMode
+    {
+        ClearTranslations,
+        KeepTranslations,
+        Cancel
+    }
+
     private class RegisteredCanvasEntry
     {
+        public Component component;
         public SerializedProperty key;
         public string text;
     }
@@ -769,12 +837,6 @@ public class LocalizationManagerEditor : Editor
         {
             GameObject owner = pair.Key;
             List<RegisteredInteractionEntry> entries = pair.Value;
-            int instanceId = owner.GetInstanceID();
-            if (!_interactionCandidateFoldouts.TryGetValue(
-                instanceId, out bool expanded))
-            {
-                expanded = false;
-            }
 
             int excluded = 0;
             int clean = 0;
@@ -797,42 +859,17 @@ public class LocalizationManagerEditor : Editor
             totalMissing += missing;
 
             EditorGUILayout.BeginVertical(EditorStyles.helpBox);
-            EditorGUILayout.BeginHorizontal();
-            expanded = EditorGUILayout.Foldout(
-                expanded, owner.name, true);
-            _interactionCandidateFoldouts[instanceId] = expanded;
-            EditorGUILayout.LabelField(
-                $"{entries.Count - excluded} / {entries.Count} Interaction Text",
-                EditorStyles.miniLabel,
-                GUILayout.Width(150));
-            GUILayout.FlexibleSpace();
-            EditorGUILayout.LabelField(
-                $"JSON ✓ {clean}  △ {modified}  ! {missing}",
-                EditorStyles.miniBoldLabel,
-                GUILayout.Width(150));
-            EditorGUILayout.EndHorizontal();
-            EditorGUILayout.LabelField(
-                GetInteractionHierarchyPath(owner.transform),
-                EditorStyles.miniLabel);
+            string countText = string.Format(
+                S("mgr_text_count"),
+                entries.Count - excluded);
+            string jsonText =
+                $"JSON ✓ {clean}  △ {modified}  ! {missing}";
+            DrawRegisteredInteractionHeader(
+                owner,
+                countText,
+                jsonText,
+                modified > 0 || missing > 0);
 
-            if (expanded)
-            {
-                for (int i = 0; i < entries.Count; i++)
-                {
-                    RegisteredInteractionEntry entry = entries[i];
-                    EditorGUILayout.BeginHorizontal();
-                    entry.enabled.boolValue = EditorGUILayout.Toggle(
-                        entry.enabled.boolValue, GUILayout.Width(18));
-                    EditorGUILayout.LabelField(
-                        GetInteractionTypeLabel(entry.type),
-                        GUILayout.Width(170));
-                    entry.key.stringValue = EditorGUILayout.TextField(
-                        entry.key.stringValue);
-                    if (GUILayout.Button("●", GUILayout.Width(24)))
-                        EditorGUIUtility.PingObject(entry.target);
-                    EditorGUILayout.EndHorizontal();
-                }
-            }
             EditorGUILayout.EndVertical();
         }
 
@@ -977,16 +1014,10 @@ public class LocalizationManagerEditor : Editor
     {
         List<InteractionLocalizer> localizers =
             new List<InteractionLocalizer>();
-        HashSet<InteractionLocalizer> seen =
-            new HashSet<InteractionLocalizer>();
-        for (int i = 0; i < _interactionLocalizers.arraySize; i++)
-        {
-            InteractionLocalizer localizer =
-                _interactionLocalizers.GetArrayElementAtIndex(i)
-                    .objectReferenceValue as InteractionLocalizer;
-            if (localizer != null && seen.Add(localizer))
-                localizers.Add(localizer);
-        }
+        InteractionLocalizer localizer =
+            GetPrefabInteractionLocalizer(
+                target as LocalizationManager);
+        if (localizer != null) localizers.Add(localizer);
         return localizers;
     }
 
@@ -1557,12 +1588,10 @@ public class LocalizationManagerEditor : Editor
         }
 
         InteractionLocalizer central =
-            GetOrCreateCentralInteractionLocalizer(manager);
+            GetPrefabInteractionLocalizer(manager);
         if (central == null) return 0;
         ConfigureCentralInteractionLocalizer(
             manager, central, aggregate, baseLang);
-        RemoveNonCentralInteractionLocalizers(central);
-        SetRegisteredInteractionLocalizer(central);
         configuredLocalizerCount = groups.Count;
         EditorUtility.SetDirty(manager);
         return total;
@@ -1571,33 +1600,107 @@ public class LocalizationManagerEditor : Editor
     private const string INTERACTION_LOCALIZER_OBJECT_NAME =
         "InteractionLocalizer";
 
-    private InteractionLocalizer GetOrCreateCentralInteractionLocalizer(
+    private static InteractionLocalizer GetPrefabInteractionLocalizer(
         LocalizationManager manager)
     {
+        if (manager == null) return null;
         Transform child =
             manager.transform.Find(INTERACTION_LOCALIZER_OBJECT_NAME);
-        GameObject owner;
-        if (child == null)
-        {
-            owner = new GameObject(INTERACTION_LOCALIZER_OBJECT_NAME);
-            Undo.RegisterCreatedObjectUndo(
-                owner, "Create Interaction Text Localizer");
-            Undo.SetTransformParent(
-                owner.transform,
-                manager.transform,
-                "Parent Interaction Text Localizer");
-        }
-        else
-        {
-            owner = child.gameObject;
-        }
+        return child != null
+            ? child.GetComponent<InteractionLocalizer>()
+            : null;
+    }
 
-        InteractionLocalizer localizer =
-            owner.GetComponent<InteractionLocalizer>();
-        if (localizer == null)
-            localizer =
-                UdonSharpUndo.AddComponent<InteractionLocalizer>(owner);
-        return localizer;
+    private InteractionLocalizer AddPrefabInteractionLocalizer()
+    {
+        try
+        {
+            LocalizationManager manager = target as LocalizationManager;
+            if (manager == null)
+            {
+                ShowInteractionLocalizerAddError();
+                return null;
+            }
+
+            Transform child =
+                manager.transform.Find(INTERACTION_LOCALIZER_OBJECT_NAME);
+            GameObject owner;
+            if (child == null)
+            {
+                owner = new GameObject(INTERACTION_LOCALIZER_OBJECT_NAME);
+                Undo.RegisterCreatedObjectUndo(
+                    owner, "Create InteractionLocalizer");
+                Undo.SetTransformParent(
+                    owner.transform,
+                    manager.transform,
+                    "Parent InteractionLocalizer");
+                owner.transform.localPosition = Vector3.zero;
+                owner.transform.localRotation = Quaternion.identity;
+                owner.transform.localScale = Vector3.one;
+            }
+            else
+            {
+                owner = child.gameObject;
+            }
+
+            InteractionLocalizer localizer =
+                owner.GetComponent<InteractionLocalizer>();
+            if (localizer == null)
+            {
+                localizer =
+                    UdonSharpUndo.AddComponent<InteractionLocalizer>(owner);
+            }
+            if (localizer == null)
+            {
+                ShowInteractionLocalizerAddError();
+                return null;
+            }
+
+            SerializedObject localizerSO = new SerializedObject(localizer);
+            SerializedProperty managerProperty =
+                localizerSO.FindProperty("manager");
+            if (managerProperty != null)
+                managerProperty.objectReferenceValue = manager;
+            SerializedProperty baseLanguageProperty =
+                localizerSO.FindProperty("baseLanguage");
+            if (baseLanguageProperty != null)
+            {
+                baseLanguageProperty.stringValue =
+                    IdiomasLanguages.Codes[_quickSetupLangIndex];
+            }
+            localizerSO.ApplyModifiedProperties();
+            SetRegisteredInteractionLocalizer(localizer);
+            EditorUtility.SetDirty(localizer);
+            EditorUtility.SetDirty(manager);
+
+            if (localizer.transform.parent != manager.transform ||
+                GetPrefabInteractionLocalizer(manager) != localizer)
+            {
+                ShowInteractionLocalizerAddError();
+                return null;
+            }
+
+            return localizer;
+        }
+        catch (System.Exception exception)
+        {
+            ShowInteractionLocalizerAddError(exception);
+            return null;
+        }
+    }
+
+    private void ShowInteractionLocalizerAddError(
+        System.Exception exception = null)
+    {
+        string message = S("mgr_add_interaction_error_msg");
+        if (exception != null)
+            Debug.LogException(exception);
+        else
+            Debug.LogError(message);
+        EditorUtility.DisplayDialog(
+            S("error_title"),
+            message,
+            S("ok"));
     }
 
     private void ConfigureCentralInteractionLocalizer(
@@ -1651,39 +1754,6 @@ public class LocalizationManagerEditor : Editor
         _interactionLocalizers.arraySize = 1;
         _interactionLocalizers.GetArrayElementAtIndex(0)
             .objectReferenceValue = localizer;
-        serializedObject.ApplyModifiedProperties();
-    }
-
-    private void RemoveNonCentralInteractionLocalizers(
-        InteractionLocalizer central)
-    {
-        InteractionLocalizer[] localizers =
-            FindObjectsByType<InteractionLocalizer>(
-                FindObjectsInactive.Include,
-                FindObjectsSortMode.None);
-        for (int i = 0; i < localizers.Length; i++)
-        {
-            InteractionLocalizer localizer = localizers[i];
-            if (localizer == null || localizer == central) continue;
-            RemoveInteractionLocalizerWithoutDialog(localizer);
-        }
-    }
-
-    private void RegisterInteractionLocalizer(InteractionLocalizer localizer)
-    {
-        for (int i = 0; i < _interactionLocalizers.arraySize; i++)
-        {
-            if (_interactionLocalizers.GetArrayElementAtIndex(i).objectReferenceValue ==
-                localizer)
-            {
-                return;
-            }
-        }
-
-        int index = _interactionLocalizers.arraySize;
-        _interactionLocalizers.arraySize = index + 1;
-        _interactionLocalizers.GetArrayElementAtIndex(index).objectReferenceValue =
-            localizer;
         serializedObject.ApplyModifiedProperties();
     }
 
@@ -1925,6 +1995,7 @@ public class LocalizationManagerEditor : Editor
         public Canvas canvas;
         public int tmpCount;
         public int legacyCount;
+        public int missingTextCount;
         public bool hasCanvasLocalizer;
         public string hierarchyPath;
         public string parentCanvasLocalizerName;
@@ -1949,6 +2020,10 @@ public class LocalizationManagerEditor : Editor
 
             // Verificar si ya tiene CanvasLocalizer
             bool hasCL = go.GetComponent<CanvasLocalizer>() != null;
+            int missingTextCount = hasCL
+                ? CanvasLocalizerEditor.CountMissingTexts(
+                    go.GetComponent<CanvasLocalizer>())
+                : 0;
 
             // Verificar si es hijo de otro Canvas con CanvasLocalizer
             string parentCLName = null;
@@ -1973,6 +2048,7 @@ public class LocalizationManagerEditor : Editor
                 canvas = canvas,
                 tmpCount = tmpCount,
                 legacyCount = legacyCount,
+                missingTextCount = missingTextCount,
                 hasCanvasLocalizer = hasCL,
                 hierarchyPath = path,
                 parentCanvasLocalizerName = parentCLName
@@ -2016,7 +2092,9 @@ public class LocalizationManagerEditor : Editor
         if (GUILayout.Button(S("mgr_scan_scene"), GUILayout.Height(24)))
         {
             ScanSceneForCanvas();
-            if (_includeInteractionTexts.boolValue)
+            if (_includeInteractionTexts.boolValue &&
+                GetPrefabInteractionLocalizer(
+                    target as LocalizationManager) != null)
                 ScanInteractionTexts();
             else
             {
@@ -2040,14 +2118,18 @@ public class LocalizationManagerEditor : Editor
             int qsCandidateCount = 0;
             int qsCandidateTextCount = 0;
             int qsInteractionCount = CountIncludedInteractionTexts();
+            int qsInteractionObjectCount =
+                CountIncludedInteractionObjects();
             for (int i = 0; i < _canvasSearchResults.Count; i++)
             {
-                if (!_canvasSearchResults[i].hasCanvasLocalizer &&
-                    _canvasSearchResults[i].tmpCount + _canvasSearchResults[i].legacyCount > 0)
+                CanvasSearchResult result = _canvasSearchResults[i];
+                int pendingTextCount = result.hasCanvasLocalizer
+                    ? result.missingTextCount
+                    : result.tmpCount + result.legacyCount;
+                if (pendingTextCount > 0)
                 {
                     qsCandidateCount++;
-                    qsCandidateTextCount += _canvasSearchResults[i].tmpCount
-                        + _canvasSearchResults[i].legacyCount;
+                    qsCandidateTextCount += pendingTextCount;
                 }
             }
 
@@ -2072,17 +2154,24 @@ public class LocalizationManagerEditor : Editor
                     _quickSetupLangIndex, IdiomasLanguages.PopupLabelsLatin);
 
                 EditorGUILayout.Space(3);
-                EditorGUI.BeginDisabledGroup(HasInvalidInteractionKeys());
+                bool interactionLocalizerMissing =
+                    _includeInteractionTexts.boolValue &&
+                    GetPrefabInteractionLocalizer(
+                        target as LocalizationManager) == null;
+                EditorGUI.BeginDisabledGroup(
+                    HasInvalidInteractionKeys() ||
+                    interactionLocalizerMissing);
                 GUI.backgroundColor = new Color(0.3f, 0.9f, 0.5f);
                 if (GUILayout.Button(
                     string.Format(
                         S("mgr_quick_setup_btn"),
-                        qsCandidateCount + qsInteractionCount),
+                        qsCandidateCount + qsInteractionObjectCount),
                     GUILayout.Height(28)))
                 {
                     QuickSetupAll(
                         qsCandidateCount,
                         qsCandidateTextCount,
+                        qsInteractionObjectCount,
                         qsInteractionCount);
                 }
                 GUI.backgroundColor = Color.white;
@@ -2114,6 +2203,11 @@ public class LocalizationManagerEditor : Editor
             if (_canvasSearchResults[i].hasCanvasLocalizer) alreadyLocalized++;
             else if (_canvasSearchResults[i].tmpCount + _canvasSearchResults[i].legacyCount == 0) noTexts++;
             else candidates++;
+            if (_canvasSearchResults[i].hasCanvasLocalizer &&
+                _canvasSearchResults[i].missingTextCount > 0)
+            {
+                candidates++;
+            }
         }
 
         if (_canvasSearchResults.Count > 0 ||
@@ -2159,7 +2253,10 @@ public class LocalizationManagerEditor : Editor
             GUIStyle linkStyle = new GUIStyle(EditorStyles.label);
             linkStyle.fontStyle = FontStyle.Bold;
             linkStyle.normal.textColor = new Color(0.3f, 0.6f, 1f);
-            if (GUILayout.Button(r.gameObject.name, linkStyle, GUILayout.ExpandWidth(false)))
+            if (GUILayout.Button(
+                new GUIContent(r.gameObject.name, r.hierarchyPath),
+                linkStyle,
+                GUILayout.ExpandWidth(false)))
             {
                 EditorGUIUtility.PingObject(r.gameObject);
             }
@@ -2186,11 +2283,6 @@ public class LocalizationManagerEditor : Editor
             GUI.backgroundColor = Color.white;
 
             EditorGUILayout.EndHorizontal();
-
-            // Path de jerarquia (en gris, mas pequeno)
-            GUIStyle pathStyle = new GUIStyle(EditorStyles.miniLabel);
-            pathStyle.normal.textColor = Color.gray;
-            EditorGUILayout.LabelField(r.hierarchyPath, pathStyle);
 
             // Aviso si es hijo de otro Canvas con CanvasLocalizer
             if (r.parentCanvasLocalizerName != null)
@@ -2230,6 +2322,8 @@ public class LocalizationManagerEditor : Editor
             List<string> deletableKeys =
                 GetDeletableCanvasKeys(cl, clKeys);
             int deletableKeyCount = deletableKeys.Count;
+            int sharedKeyCount =
+                CountSharedCanvasKeys(cl, clKeys);
             Dictionary<string, string> canvasBaseEntries =
                 GetCanvasBaseLanguageEntries(cl);
             List<RegisteredCanvasEntry> canvasEntries =
@@ -2255,77 +2349,91 @@ public class LocalizationManagerEditor : Editor
                 }
             }
 
-            EditorGUILayout.BeginVertical(EditorStyles.helpBox);
-
-            // Linea 1: nombre + info + estado JSON
-            EditorGUILayout.BeginHorizontal();
-
-            GUIStyle greenStyle = new GUIStyle(EditorStyles.label);
-            greenStyle.normal.textColor = new Color(0.2f, 0.7f, 0.2f);
-            if (GUILayout.Button(r.gameObject.name, greenStyle, GUILayout.ExpandWidth(false)))
-            {
-                EditorGUIUtility.PingObject(r.gameObject);
-            }
-
-            EditorGUILayout.LabelField(
-                $"canvasId: \"{clId}\"  |  {(cl != null ? cl.GetTextCount() : 0)} textos",
-                EditorStyles.miniLabel);
-
-            // Indicador de estado en el JSON
-            GUIStyle jsonStatusStyle = new GUIStyle(EditorStyles.miniLabel);
-            jsonStatusStyle.fontStyle = FontStyle.Bold;
             string jsonStatusText;
             if (totalKeys == 0)
             {
-                jsonStatusStyle.normal.textColor = new Color(0.8f, 0.5f, 0.0f);
                 jsonStatusText = S("mgr_no_keys");
             }
             else if (modifiedEntries > 0 || missingEntries > 0)
             {
-                jsonStatusStyle.normal.textColor =
-                    new Color(0.8f, 0.5f, 0.0f);
                 jsonStatusText =
                     $"JSON ✓ {cleanEntries}  △ {modifiedEntries}  ! {missingEntries}";
             }
             else
             {
-                jsonStatusStyle.normal.textColor = new Color(0.2f, 0.7f, 0.2f);
                 jsonStatusText =
                     $"JSON ✓ {cleanEntries}  △ 0  ! 0";
             }
-            EditorGUILayout.LabelField(jsonStatusText, jsonStatusStyle, GUILayout.Width(160));
+            if (sharedKeyCount > 0)
+            {
+                jsonStatusText += "  |  " +
+                    string.Format(
+                        S("mgr_shared_keys"), sharedKeyCount);
+            }
+            int missingKeys = missingEntries + modifiedEntries +
+                r.missingTextCount;
 
-            EditorGUILayout.EndHorizontal();
+            EditorGUILayout.BeginVertical(EditorStyles.helpBox);
 
-            // Linea 2: botones alineados a la derecha
+            // Linea 1: nombre, informacion del Canvas y estado JSON
+            GUIStyle canvasLinkStyle = new GUIStyle(EditorStyles.label);
+            canvasLinkStyle.normal.textColor = new Color(0.3f, 0.6f, 1f);
+            string canvasCountText =
+                string.Format(
+                    S("mgr_text_count"),
+                    cl != null ? cl.GetTextCount() : 0) +
+                (r.missingTextCount > 0
+                    ? "  |  " + string.Format(
+                        S("mgr_unregistered_text_count"),
+                        r.missingTextCount)
+                    : "");
+            DrawLocalizedObjectStatusRow(
+                r.gameObject,
+                r.hierarchyPath,
+                canvasCountText,
+                jsonStatusText,
+                totalKeys == 0 ||
+                modifiedEntries > 0 ||
+                missingEntries > 0,
+                canvasLinkStyle);
+
+            // Linea 2: acciones disponibles
+            EditorGUILayout.Space(2);
             EditorGUILayout.BeginHorizontal();
+            EditorGUILayout.LabelField(
+                $"canvasId: \"{clId}\"",
+                EditorStyles.miniLabel,
+                GUILayout.ExpandWidth(false));
             GUILayout.FlexibleSpace();
 
             // Boton para restaurar claves faltantes al JSON
-            int missingKeys = missingEntries + modifiedEntries;
-            EditorGUI.BeginDisabledGroup(missingKeys == 0);
-            GUI.backgroundColor = new Color(0.3f, 0.8f, 0.5f);
-            if (GUILayout.Button(string.Format(S("mgr_restore_json"), missingKeys), GUILayout.Width(140)))
+            if (missingKeys > 0)
             {
-                RestoreKeysToJson(cl, clKeys);
+                GUI.backgroundColor = new Color(0.3f, 0.8f, 0.5f);
+                if (GUILayout.Button(
+                    string.Format(
+                        S("mgr_restore_json"), missingKeys),
+                    GUILayout.Width(140)))
+                {
+                    RestoreKeysToJson(cl, clKeys);
+                }
+                GUI.backgroundColor = Color.white;
             }
-            GUI.backgroundColor = Color.white;
-            EditorGUI.EndDisabledGroup();
 
             // Boton para limpiar claves del JSON
-            EditorGUI.BeginDisabledGroup(
-                missingKeys > 0 || deletableKeyCount == 0);
-            GUI.backgroundColor = new Color(1f, 0.7f, 0.3f);
-            if (GUILayout.Button(
-                string.Format(
-                    S("mgr_clean_json"), deletableKeyCount),
-                GUILayout.Width(130)))
+            if (missingKeys == 0 && deletableKeyCount > 0)
             {
-                RemoveKeysFromJson(
-                    cl, deletableKeys, deletableKeyCount);
+                GUI.backgroundColor = new Color(1f, 0.7f, 0.3f);
+                if (GUILayout.Button(
+                    string.Format(
+                        S("mgr_clean_json"), deletableKeyCount),
+                    GUILayout.Width(130)))
+                {
+                    RemoveKeysFromJson(
+                        cl, deletableKeys, deletableKeyCount);
+                }
+                GUI.backgroundColor = Color.white;
             }
-            GUI.backgroundColor = Color.white;
-            EditorGUI.EndDisabledGroup();
 
             // Boton para quitar CanvasLocalizer
             GUI.backgroundColor = new Color(1f, 0.4f, 0.4f);
@@ -2363,10 +2471,12 @@ public class LocalizationManagerEditor : Editor
         }
         }
 
-        List<InteractionLocalizer> interactionLocalizers =
-            GetRegisteredInteractionLocalizers();
+        InteractionLocalizer interactionLocalizer =
+            GetPrefabInteractionLocalizer(target as LocalizationManager);
         int interactionCandidateCount = CountIncludedInteractionTexts();
-        if (interactionLocalizers.Count > 0 || interactionCandidateCount > 0)
+        if (_includeInteractionTexts.boolValue ||
+            interactionLocalizer != null ||
+            interactionCandidateCount > 0)
         {
             _showInteractionResults = EditorGUILayout.Foldout(
                 _showInteractionResults,
@@ -2374,11 +2484,31 @@ public class LocalizationManagerEditor : Editor
                 true);
             if (_showInteractionResults)
             {
-                EditorGUI.indentLevel++;
+                if (interactionLocalizer == null)
+                {
+                    EditorGUILayout.HelpBox(
+                        S("mgr_interaction_missing"),
+                        MessageType.Warning);
+                    EditorGUILayout.Space(3);
+                    Color previousBackgroundColor = GUI.backgroundColor;
+                    GUI.backgroundColor = new Color(0.3f, 0.8f, 0.5f);
+                    if (GUILayout.Button(
+                        S("mgr_add_interaction_localizer"),
+                        GUILayout.Height(24)))
+                    {
+                        interactionLocalizer =
+                            AddPrefabInteractionLocalizer();
+                    }
+                    GUI.backgroundColor = previousBackgroundColor;
+                }
+                else
+                {
+                    DrawInteractionLocalizerEditLink(
+                        interactionLocalizer);
+                }
                 DrawInteractionResults();
-                for (int i = 0; i < interactionLocalizers.Count; i++)
-                    DrawInteractionLocalizerList(interactionLocalizers[i]);
-                EditorGUI.indentLevel--;
+                if (interactionLocalizer != null)
+                    DrawInteractionLocalizerList(interactionLocalizer);
             }
         }
     }
@@ -2603,6 +2733,22 @@ public class LocalizationManagerEditor : Editor
         return deletable;
     }
 
+    private int CountSharedCanvasKeys(
+        CanvasLocalizer localizer, List<string> keys)
+    {
+        int shared = 0;
+        for (int i = 0; i < keys.Count; i++)
+        {
+            List<string> singleKey = new List<string> { keys[i] };
+            if (CountKeysInJson(singleKey) > 0 &&
+                IsTranslationKeyUsedElsewhere(keys[i], localizer))
+            {
+                shared++;
+            }
+        }
+        return shared;
+    }
+
     private void RemoveKeysFromJson(CanvasLocalizer cl, List<string> keys, int keysInJson)
     {
         RemoveKeysFromJson(keys, keysInJson, cl.GetCanvasId(), cl);
@@ -2703,7 +2849,7 @@ public class LocalizationManagerEditor : Editor
     /// </summary>
     private void RestoreKeysToJson(CanvasLocalizer cl, List<string> allKeys)
     {
-        if (cl == null || allKeys.Count == 0) return;
+        if (cl == null) return;
 
         TextAsset ta = _translationFile.objectReferenceValue as TextAsset;
         if (ta == null)
@@ -2732,9 +2878,24 @@ public class LocalizationManagerEditor : Editor
             return;
         }
 
-        int added = SyncCanvasLocalizerToJson(cl, translations);
+        int appended = CanvasLocalizerEditor.AppendMissingTexts(
+            cl, cl.GetBaseLanguage(), translations);
+        SourceTranslationUpdateMode updateMode =
+            ConfirmModifiedSourceTexts(
+                CountModifiedCanvasEntries(cl, translations));
+        if (updateMode == SourceTranslationUpdateMode.Cancel) return;
 
-        if (added == 0)
+        HashSet<string> orphanCandidates = new HashSet<string>();
+        int added = appended + SyncCanvasLocalizerToJson(
+            cl,
+            translations,
+            updateMode ==
+                SourceTranslationUpdateMode.ClearTranslations,
+            orphanCandidates);
+        int removed = ConfirmAndRemoveOrphanedKeys(
+            translations, orphanCandidates);
+
+        if (added == 0 && removed == 0)
         {
             EditorUtility.DisplayDialog(S("no_changes"),
                 S("no_changes_msg"), S("ok"));
@@ -2830,6 +2991,7 @@ public class LocalizationManagerEditor : Editor
             if (component == null || string.IsNullOrWhiteSpace(text)) continue;
             entries.Add(new RegisteredCanvasEntry
             {
+                component = component,
                 key = keys.GetArrayElementAtIndex(i),
                 text = text
             });
@@ -2838,7 +3000,9 @@ public class LocalizationManagerEditor : Editor
 
     private int SyncCanvasLocalizerToJson(
         CanvasLocalizer localizer,
-        Dictionary<string, Dictionary<string, string>> translations)
+        Dictionary<string, Dictionary<string, string>> translations,
+        bool clearModifiedTranslations,
+        HashSet<string> orphanCandidates)
     {
         if (localizer == null || translations == null) return 0;
         string baseLanguage = localizer.GetBaseLanguage();
@@ -2888,7 +3052,9 @@ public class LocalizationManagerEditor : Editor
                 GetInteractionReferenceCount(referenceCounts, oldKey) > 1)
             {
                 key = GenerateInteractionDetachedKey(
-                    oldKey, reservedKeys, referenceCounts);
+                    BuildCanvasNativeKey(localizer, entry),
+                    reservedKeys,
+                    referenceCounts);
             }
             else if (string.IsNullOrWhiteSpace(key))
             {
@@ -2908,14 +3074,25 @@ public class LocalizationManagerEditor : Editor
                 referenceCounts[key] =
                     GetInteractionReferenceCount(referenceCounts, key) + 1;
                 entry.key.stringValue = key;
+                if (!string.IsNullOrWhiteSpace(oldKey))
+                    orphanCandidates?.Add(oldKey);
                 reassigned++;
             }
 
             reservedKeys.Add(key);
             canonicalByText[entry.text] = key;
-            if (!baseEntries.TryGetValue(key, out string current) ||
+            bool modifiesExistingKey =
+                key == oldKey &&
+                baseEntries.TryGetValue(key, out string current) &&
+                current != entry.text;
+            if (!baseEntries.TryGetValue(key, out current) ||
                 current != entry.text)
             {
+                if (modifiesExistingKey && clearModifiedTranslations)
+                {
+                    RemoveTranslationsExceptBase(
+                        translations, baseLanguage, key);
+                }
                 baseEntries[key] = entry.text;
                 updated++;
             }
@@ -2924,6 +3101,100 @@ public class LocalizationManagerEditor : Editor
         localizerSO.ApplyModifiedProperties();
         EditorUtility.SetDirty(localizer);
         return updated + reassigned;
+    }
+
+    private static void RemoveTranslationsExceptBase(
+        Dictionary<string, Dictionary<string, string>> translations,
+        string baseLanguage,
+        string key)
+    {
+        foreach (KeyValuePair<string, Dictionary<string, string>> language
+            in translations)
+        {
+            if (language.Key != baseLanguage)
+                language.Value.Remove(key);
+        }
+    }
+
+    private SourceTranslationUpdateMode ConfirmModifiedSourceTexts(
+        int modifiedCount)
+    {
+        if (modifiedCount == 0)
+            return SourceTranslationUpdateMode.KeepTranslations;
+
+        int result = EditorUtility.DisplayDialogComplex(
+            S("mgr_sync_modified_title"),
+            string.Format(S("mgr_sync_modified_msg"), modifiedCount),
+            S("mgr_sync_clear_translations"),
+            S("cancel"),
+            S("mgr_sync_keep_translations"));
+        if (result == 0)
+            return SourceTranslationUpdateMode.ClearTranslations;
+        if (result == 2)
+            return SourceTranslationUpdateMode.KeepTranslations;
+        return SourceTranslationUpdateMode.Cancel;
+    }
+
+    private static int CountModifiedCanvasEntries(
+        CanvasLocalizer localizer,
+        Dictionary<string, Dictionary<string, string>> translations)
+    {
+        if (localizer == null || translations == null) return 0;
+        string baseLanguage = localizer.GetBaseLanguage();
+        if (!translations.TryGetValue(
+            baseLanguage, out Dictionary<string, string> baseEntries))
+        {
+            return 0;
+        }
+
+        int modified = 0;
+        List<RegisteredCanvasEntry> entries =
+            BuildRegisteredCanvasEntries(new SerializedObject(localizer));
+        for (int i = 0; i < entries.Count; i++)
+        {
+            string key = entries[i].key.stringValue;
+            if (baseEntries.TryGetValue(key, out string storedText) &&
+                storedText != entries[i].text)
+            {
+                modified++;
+            }
+        }
+        return modified;
+    }
+
+    private static int CountModifiedInteractionEntries(
+        InteractionLocalizer localizer,
+        Dictionary<string, Dictionary<string, string>> translations)
+    {
+        if (localizer == null || translations == null) return 0;
+        string baseLanguage = localizer.GetBaseLanguage();
+        if (!translations.TryGetValue(
+            baseLanguage, out Dictionary<string, string> baseEntries))
+        {
+            return 0;
+        }
+
+        SerializedObject localizerSO = new SerializedObject(localizer);
+        EnsureInteractionEnabledArrays(localizerSO);
+        Dictionary<GameObject, List<RegisteredInteractionEntry>> groups =
+            BuildRegisteredInteractionGroups(localizerSO);
+        int modified = 0;
+        foreach (var pair in groups)
+        {
+            List<RegisteredInteractionEntry> entries = pair.Value;
+            for (int i = 0; i < entries.Count; i++)
+            {
+                RegisteredInteractionEntry entry = entries[i];
+                string key = entry.key.stringValue;
+                if (entry.enabled.boolValue &&
+                    baseEntries.TryGetValue(key, out string storedText) &&
+                    storedText != entry.text)
+                {
+                    modified++;
+                }
+            }
+        }
+        return modified;
     }
 
     /// <summary>
@@ -2979,7 +3250,9 @@ public class LocalizationManagerEditor : Editor
     /// </summary>
     private int SyncInteractionLocalizerToJson(
         InteractionLocalizer localizer,
-        Dictionary<string, Dictionary<string, string>> translations)
+        Dictionary<string, Dictionary<string, string>> translations,
+        bool clearModifiedTranslations,
+        HashSet<string> orphanCandidates)
     {
         if (localizer == null || translations == null) return 0;
 
@@ -3042,7 +3315,9 @@ public class LocalizationManagerEditor : Editor
                 GetInteractionReferenceCount(referenceCounts, oldKey) > 1)
             {
                 key = GenerateInteractionDetachedKey(
-                    oldKey, reservedKeys, referenceCounts);
+                    BuildInteractionNativeKey(entry),
+                    reservedKeys,
+                    referenceCounts);
             }
             else if (string.IsNullOrWhiteSpace(key))
             {
@@ -3062,14 +3337,25 @@ public class LocalizationManagerEditor : Editor
                 referenceCounts[key] =
                     GetInteractionReferenceCount(referenceCounts, key) + 1;
                 entry.key.stringValue = key;
+                if (!string.IsNullOrWhiteSpace(oldKey))
+                    orphanCandidates?.Add(oldKey);
                 reassigned++;
             }
 
             reservedKeys.Add(key);
             canonicalByText[entry.text] = key;
-            if (!baseEntries.TryGetValue(key, out string current) ||
+            bool modifiesExistingKey =
+                key == oldKey &&
+                baseEntries.TryGetValue(key, out string current) &&
+                current != entry.text;
+            if (!baseEntries.TryGetValue(key, out current) ||
                 current != entry.text)
             {
+                if (modifiesExistingKey && clearModifiedTranslations)
+                {
+                    RemoveTranslationsExceptBase(
+                        translations, baseLanguage, key);
+                }
                 baseEntries[key] = entry.text;
                 updated++;
             }
@@ -3096,6 +3382,51 @@ public class LocalizationManagerEditor : Editor
         return count;
     }
 
+    private static string BuildCanvasNativeKey(
+        CanvasLocalizer localizer, RegisteredCanvasEntry entry)
+    {
+        string canvasId = IdiomasEditorUtils.NormalizeName(
+            localizer != null ? localizer.GetCanvasId() : "");
+        if (string.IsNullOrEmpty(canvasId)) canvasId = "canvas";
+        if (canvasId.StartsWith("canvas_"))
+            canvasId = canvasId.Substring(7);
+
+        List<string> names = new List<string>();
+        Transform current = entry.component != null
+            ? entry.component.transform
+            : null;
+        Transform root = localizer != null ? localizer.transform : null;
+        while (current != null && current != root && names.Count < 2)
+        {
+            string name = IdiomasEditorUtils.NormalizeName(current.name);
+            if (!string.IsNullOrEmpty(name) &&
+                name != "text" && name != "label" && name != "tmp" &&
+                name != "text_tmp")
+            {
+                names.Insert(0, name);
+            }
+            current = current.parent;
+        }
+        string suffix = names.Count > 0
+            ? string.Join("_", names)
+            : "text";
+        return "canvas_" + canvasId + "_" + suffix;
+    }
+
+    private static string BuildInteractionNativeKey(
+        RegisteredInteractionEntry entry)
+    {
+        Component component = entry.target as Component;
+        string objectName = IdiomasEditorUtils.NormalizeName(
+            component != null ? component.gameObject.name : "object");
+        if (string.IsNullOrEmpty(objectName)) objectName = "object";
+        if (entry.type == InteractionTextType.PickupInteraction)
+            return "pickup_interaction_" + objectName;
+        if (entry.type == InteractionTextType.PickupUse)
+            return "pickup_use_" + objectName;
+        return "interaction_" + objectName;
+    }
+
     private static string GenerateInteractionDetachedKey(
         string originalKey,
         HashSet<string> reservedKeys,
@@ -3105,14 +3436,69 @@ public class LocalizationManagerEditor : Editor
             ? "interaction"
             : originalKey;
         int suffix = 2;
-        string candidate = stem + "_" + suffix;
+        string candidate = stem;
         while (reservedKeys.Contains(candidate) ||
             GetInteractionReferenceCount(referenceCounts, candidate) > 0)
         {
-            suffix++;
             candidate = stem + "_" + suffix;
+            suffix++;
         }
         return candidate;
+    }
+
+    /// <summary>
+    /// Confirma y elimina de todos los idiomas las claves antiguas que ya no
+    /// estan referenciadas por ningun localizador de la escena.
+    /// </summary>
+    private int ConfirmAndRemoveOrphanedKeys(
+        Dictionary<string, Dictionary<string, string>> translations,
+        HashSet<string> candidates)
+    {
+        if (translations == null || candidates == null ||
+            candidates.Count == 0)
+        {
+            return 0;
+        }
+
+        List<string> orphanedKeys = new List<string>();
+        foreach (string key in candidates)
+        {
+            if (string.IsNullOrWhiteSpace(key) ||
+                IdiomasEditorUtils.CountSceneTranslationKeyReferences(key) > 0)
+            {
+                continue;
+            }
+
+            foreach (Dictionary<string, string> language in
+                translations.Values)
+            {
+                if (language.ContainsKey(key))
+                {
+                    orphanedKeys.Add(key);
+                    break;
+                }
+            }
+        }
+
+        if (orphanedKeys.Count == 0) return 0;
+        orphanedKeys.Sort(System.StringComparer.Ordinal);
+        bool remove = EditorUtility.DisplayDialog(
+            S("mgr_orphan_keys_title"),
+            string.Format(
+                S("mgr_orphan_keys_msg"), orphanedKeys.Count),
+            S("mgr_orphan_keys_delete"),
+            S("mgr_orphan_keys_keep"));
+        if (!remove) return 0;
+
+        for (int i = 0; i < orphanedKeys.Count; i++)
+        {
+            foreach (Dictionary<string, string> language in
+                translations.Values)
+            {
+                language.Remove(orphanedKeys[i]);
+            }
+        }
+        return orphanedKeys.Count;
     }
 
     /// <summary>
@@ -3322,11 +3708,34 @@ public class LocalizationManagerEditor : Editor
 
         int totalAdded = 0;
         int canvasProcessed = 0;
+        int modifiedSourceTexts = 0;
+        for (int i = 0; i < localizers.Count; i++)
+        {
+            totalAdded += CanvasLocalizerEditor.AppendMissingTexts(
+                localizers[i],
+                localizers[i].GetBaseLanguage(),
+                translations);
+            modifiedSourceTexts += CountModifiedCanvasEntries(
+                localizers[i], translations);
+        }
+        for (int i = 0; i < interactionLocalizers.Count; i++)
+        {
+            modifiedSourceTexts += CountModifiedInteractionEntries(
+                interactionLocalizers[i], translations);
+        }
+        SourceTranslationUpdateMode updateMode =
+            ConfirmModifiedSourceTexts(modifiedSourceTexts);
+        if (updateMode == SourceTranslationUpdateMode.Cancel) return;
+        bool clearModifiedTranslations =
+            updateMode == SourceTranslationUpdateMode.ClearTranslations;
+        HashSet<string> orphanCandidates = new HashSet<string>();
 
         for (int c = 0; c < localizers.Count; c++)
         {
             CanvasLocalizer cl = localizers[c];
-            int synchronized = SyncCanvasLocalizerToJson(cl, translations);
+            int synchronized = SyncCanvasLocalizerToJson(
+                cl, translations, clearModifiedTranslations,
+                orphanCandidates);
             if (synchronized > 0) canvasProcessed++;
             totalAdded += synchronized;
         }
@@ -3335,12 +3744,15 @@ public class LocalizationManagerEditor : Editor
         {
             InteractionLocalizer localizer = interactionLocalizers[i];
             int synchronized = SyncInteractionLocalizerToJson(
-                localizer, translations);
+                localizer, translations, clearModifiedTranslations,
+                orphanCandidates);
             if (synchronized > 0) canvasProcessed++;
             totalAdded += synchronized;
         }
 
-        if (totalAdded == 0)
+        int removed = ConfirmAndRemoveOrphanedKeys(
+            translations, orphanCandidates);
+        if (totalAdded == 0 && removed == 0)
         {
             EditorUtility.DisplayDialog(S("no_changes"),
                 S("no_changes_msg"), S("ok"));
@@ -3504,11 +3916,20 @@ public class LocalizationManagerEditor : Editor
         _canvasLocalizers.ClearArray();
         serializedObject.ApplyModifiedProperties();
 
-        // Actualizar resultados de escaneo si existen
-        if (_canvasSearchResults != null)
+        // Reconstruir ambos resultados. La lista de Interaction queda vacia
+        // despues de una configuracion rapida y no debe reutilizarse.
+        ScanSceneForCanvas();
+        if (_includeInteractionTexts.boolValue &&
+            GetPrefabInteractionLocalizer(
+                target as LocalizationManager) != null)
         {
-            for (int i = 0; i < _canvasSearchResults.Count; i++)
-                _canvasSearchResults[i].hasCanvasLocalizer = false;
+            ScanInteractionTexts();
+        }
+        else
+        {
+            _interactionSearchResults = null;
+            _interactionDetectedObjectCount = 0;
+            _interactionRegisteredObjectCount = 0;
         }
 
         Debug.Log(
@@ -3573,6 +3994,7 @@ public class LocalizationManagerEditor : Editor
     private void QuickSetupAll(
         int candidateCount,
         int candidateTextCount,
+        int interactionObjectCount,
         int interactionTextCount)
     {
         string baseLang = IdiomasLanguages.Codes[_quickSetupLangIndex];
@@ -3593,8 +4015,6 @@ public class LocalizationManagerEditor : Editor
         }
 
         LocalizationManager mgr = (LocalizationManager)target;
-        int interactionObjectCount = CountIncludedInteractionObjects();
-
         // ============================================================
         // Preparar archivo JSON (leer o crear)
         // ============================================================
@@ -3681,6 +4101,28 @@ public class LocalizationManagerEditor : Editor
         // ============================================================
         int totalTexts = 0;
         int processedCanvas = 0;
+
+        // Incorporar textos agregados a CanvasLocalizer ya configurados.
+        for (int i = 0; i < _canvasSearchResults.Count; i++)
+        {
+            CanvasSearchResult result = _canvasSearchResults[i];
+            if (!result.hasCanvasLocalizer ||
+                result.missingTextCount == 0 ||
+                result.gameObject == null)
+            {
+                continue;
+            }
+            CanvasLocalizer existing =
+                result.gameObject.GetComponent<CanvasLocalizer>();
+            int appended = CanvasLocalizerEditor.AppendMissingTexts(
+                existing, baseLang, translations);
+            if (appended > 0)
+            {
+                totalTexts += appended;
+                processedCanvas++;
+                result.missingTextCount = 0;
+            }
+        }
 
         for (int i = 0; i < toProcess.Count; i++)
         {
