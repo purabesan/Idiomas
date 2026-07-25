@@ -421,6 +421,8 @@ public class CanvasLocalizerEditor : Editor
 
         _scanResults = new List<ScanEntry>();
         HashSet<string> usedKeys = GetBaseLanguageJsonKeys();
+        Dictionary<string, string> canonicalByText =
+            BuildCanvasCanonicalKeyIndex();
 
         // --- Buscar TextMeshProUGUI ---
         TextMeshProUGUI[] tmps = root.GetComponentsInChildren<TextMeshProUGUI>(true);
@@ -438,16 +440,25 @@ public class CanvasLocalizerEditor : Editor
             string text = tmp.text;
             if (string.IsNullOrEmpty(text) || string.IsNullOrWhiteSpace(text)) continue;
 
+            bool wasConfigured = existingKeys.ContainsKey(tmp);
+            bool excluded = excludedSet.Contains(tmp.gameObject) ||
+                            ContainsExcludedKeyword(text) ||
+                            (!wasConfigured && IsNonTranslatable(text));
+
             // Determinar clave: preservar existente o generar nueva
             string key;
-            if (existingKeys.ContainsKey(tmp))
+            if (wasConfigured)
                 key = existingKeys[tmp];
+            else if (!excluded &&
+                     canonicalByText.TryGetValue(text, out string canonical))
+                key = canonical;
             else
                 key = GenerateKey(root, tmp.transform, id, usedKeys);
 
             usedKeys.Add(key);
+            if (!excluded && !canonicalByText.ContainsKey(text))
+                canonicalByText[text] = key;
 
-            bool wasConfigured = existingKeys.ContainsKey(tmp);
             _scanResults.Add(new ScanEntry
             {
                 component = tmp,
@@ -455,9 +466,7 @@ public class CanvasLocalizerEditor : Editor
                 generatedKey = key,
                 currentText = text,
                 objectPath = GetRelativePath(root, tmp.transform),
-                excluded = excludedSet.Contains(tmp.gameObject) ||
-                           ContainsExcludedKeyword(text) ||
-                           (!wasConfigured && IsNonTranslatable(text)),
+                excluded = excluded,
                 existsInJson = false,
             });
         }
@@ -475,15 +484,24 @@ public class CanvasLocalizerEditor : Editor
             string text = txt.text;
             if (string.IsNullOrEmpty(text) || string.IsNullOrWhiteSpace(text)) continue;
 
+            bool wasConfiguredLegacy = existingKeys.ContainsKey(txt);
+            bool excluded = excludedSet.Contains(txt.gameObject) ||
+                            ContainsExcludedKeyword(text) ||
+                            (!wasConfiguredLegacy && IsNonTranslatable(text));
+
             string key;
-            if (existingKeys.ContainsKey(txt))
+            if (wasConfiguredLegacy)
                 key = existingKeys[txt];
+            else if (!excluded &&
+                     canonicalByText.TryGetValue(text, out string canonical))
+                key = canonical;
             else
                 key = GenerateKey(root, txt.transform, id, usedKeys);
 
             usedKeys.Add(key);
+            if (!excluded && !canonicalByText.ContainsKey(text))
+                canonicalByText[text] = key;
 
-            bool wasConfiguredLegacy = existingKeys.ContainsKey(txt);
             _scanResults.Add(new ScanEntry
             {
                 component = txt,
@@ -491,9 +509,7 @@ public class CanvasLocalizerEditor : Editor
                 generatedKey = key,
                 currentText = text,
                 objectPath = GetRelativePath(root, txt.transform),
-                excluded = excludedSet.Contains(txt.gameObject) ||
-                           ContainsExcludedKeyword(text) ||
-                           (!wasConfiguredLegacy && IsNonTranslatable(text)),
+                excluded = excluded,
                 existsInJson = false,
             });
         }
@@ -648,24 +664,40 @@ public class CanvasLocalizerEditor : Editor
 
         EditorGUILayout.Space(3);
 
-        // --- Construir set de claves para detectar duplicados (mejora 4) ---
-        HashSet<string> duplicateCheck = new HashSet<string>();
-        HashSet<string> duplicateKeys = new HashSet<string>();
+        // Una clave compartida es valida si todos sus textos originales
+        // coinciden. Solo se considera conflicto si la misma clave de salida
+        // apunta a textos diferentes.
+        Dictionary<string, string> sourceTextByKey =
+            new Dictionary<string, string>(System.StringComparer.Ordinal);
+        HashSet<string> conflictingKeys =
+            new HashSet<string>(System.StringComparer.Ordinal);
         for (int i = 0; i < _scanResults.Count; i++)
         {
-            if (_scanResults[i].excluded) continue;
-            string k = _scanResults[i].generatedKey;
-            if (!string.IsNullOrEmpty(k))
+            ScanEntry entry = _scanResults[i];
+            if (entry.excluded) continue;
+            string key = GetOutputKey(entry);
+            if (string.IsNullOrEmpty(key)) continue;
+
+            if (sourceTextByKey.TryGetValue(
+                key, out string existingText))
             {
-                if (!duplicateCheck.Add(k))
-                    duplicateKeys.Add(k);
+                if (!string.Equals(
+                    existingText,
+                    entry.currentText,
+                    System.StringComparison.Ordinal))
+                {
+                    conflictingKeys.Add(key);
+                }
             }
+            else
+                sourceTextByKey[key] = entry.currentText;
         }
 
-        if (duplicateKeys.Count > 0)
+        if (conflictingKeys.Count > 0)
         {
             EditorGUILayout.HelpBox(
-                string.Format(S("cl_duplicate_warning"), duplicateKeys.Count),
+                string.Format(
+                    S("cl_duplicate_warning"), conflictingKeys.Count),
                 MessageType.Error);
         }
 
@@ -738,11 +770,12 @@ public class CanvasLocalizerEditor : Editor
             else
                 bgColor = new Color(1f, 0.8f, 0.1f, 0.12f);
 
-            // Claves duplicadas en rojo
-            bool isDuplicate = !entry.excluded &&
-                !string.IsNullOrEmpty(entry.generatedKey) &&
-                duplicateKeys.Contains(entry.generatedKey);
-            if (isDuplicate)
+            // Conflictos de clave en rojo
+            string outputKey = GetOutputKey(entry);
+            bool hasKeyConflict = !entry.excluded &&
+                !string.IsNullOrEmpty(outputKey) &&
+                conflictingKeys.Contains(outputKey);
+            if (hasKeyConflict)
                 bgColor = new Color(1f, 0.15f, 0.15f, 0.2f);
 
             EditorGUILayout.BeginHorizontal(EditorStyles.helpBox);
@@ -825,7 +858,7 @@ public class CanvasLocalizerEditor : Editor
         EditorGUILayout.Space(5);
 
         // --- Boton de accion ---
-        EditorGUI.BeginDisabledGroup(duplicateKeys.Count > 0);
+        EditorGUI.BeginDisabledGroup(conflictingKeys.Count > 0);
 
         GUI.backgroundColor = new Color(0.2f, 0.8f, 0.3f);
         if (GUILayout.Button(S("cl_export_btn"), GUILayout.Height(30)))
@@ -885,6 +918,25 @@ public class CanvasLocalizerEditor : Editor
         return keys;
     }
 
+    private Dictionary<string, string> BuildCanvasCanonicalKeyIndex()
+    {
+        Dictionary<string, Dictionary<string, string>> translations = null;
+        Object managerObj = _manager.objectReferenceValue;
+        if (managerObj != null)
+        {
+            SerializedObject managerSO = new SerializedObject(managerObj);
+            TextAsset asset = managerSO.FindProperty("translationFile")
+                ?.objectReferenceValue as TextAsset;
+            if (asset != null)
+            {
+                translations =
+                    IdiomasEditorUtils.ParseJsonToDictionary(asset.text);
+            }
+        }
+        return IdiomasEditorUtils.BuildCanvasCanonicalKeyIndex(
+            _baseLanguage.stringValue, translations);
+    }
+
     /// <summary>
     /// Asigna una clave canonica cuando otro texto identico ya existe en el idioma base.
     /// La comparacion es exacta para no mezclar textos que requieren traducciones distintas.
@@ -893,8 +945,8 @@ public class CanvasLocalizerEditor : Editor
     {
         if (_scanResults == null) return;
 
-        Dictionary<string, string> canonicalByText = new Dictionary<string, string>(
-            System.StringComparer.Ordinal);
+        Dictionary<string, string> canonicalByText =
+            BuildCanvasCanonicalKeyIndex();
         Dictionary<string, string> baseEntries = null;
         Object managerObj = _manager.objectReferenceValue;
         if (managerObj != null)
@@ -1348,15 +1400,28 @@ public class CanvasLocalizerEditor : Editor
         // Quitar segmentos vacios
         segments.RemoveAll(s => string.IsNullOrEmpty(s));
 
+        // Mantener las claves legibles: usar solo los dos segmentos
+        // significativos mas cercanos al componente.
+        if (segments.Count > 2)
+            segments.RemoveRange(0, segments.Count - 2);
+
+        string normalizedCanvasId =
+            IdiomasEditorUtils.NormalizeName(canvasId);
+        if (normalizedCanvasId.StartsWith("canvas_"))
+            normalizedCanvasId = normalizedCanvasId.Substring(7);
+        if (string.IsNullOrEmpty(normalizedCanvasId))
+            normalizedCanvasId = "canvas";
+
         // Construir clave
         string key;
         if (segments.Count == 0)
         {
-            key = canvasId + "_text";
+            key = "canvas_" + normalizedCanvasId + "_text";
         }
         else
         {
-            key = canvasId + "_" + string.Join("_", segments);
+            key = "canvas_" + normalizedCanvasId + "_" +
+                string.Join("_", segments);
         }
 
         // Resolver duplicados
@@ -1499,16 +1564,9 @@ public class CanvasLocalizerEditor : Editor
             translations[baseLang] = new Dictionary<string, string>();
 
         // Reutilizar una unica clave para textos originales exactamente iguales.
-        Dictionary<string, string> canonicalByText = new Dictionary<string, string>(
-            System.StringComparer.Ordinal);
-        List<string> existingCanonicalKeys = new List<string>(translations[baseLang].Keys);
-        existingCanonicalKeys.Sort(System.StringComparer.Ordinal);
-        for (int i = 0; i < existingCanonicalKeys.Count; i++)
-        {
-            string value = translations[baseLang][existingCanonicalKeys[i]];
-            if (!string.IsNullOrEmpty(value) && !canonicalByText.ContainsKey(value))
-                canonicalByText[value] = existingCanonicalKeys[i];
-        }
+        Dictionary<string, string> canonicalByText =
+            IdiomasEditorUtils.BuildCanvasCanonicalKeyIndex(
+                baseLang, translations);
 
         Transform root = cl.transform;
 
