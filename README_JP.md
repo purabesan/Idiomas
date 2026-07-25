@@ -100,7 +100,7 @@ VRChatのフォントを使用するには、TMP Settings
 3. 必要に応じて **除外条件** を設定します
 4. **未ローカライズのテキストを検索** を開きます
 5. **「シーンをスキャン」** をクリックします
-6. **Canvas** と **InteractionText** の一覧をそれぞれ確認します
+6. **Canvas** と **Interaction** の一覧をそれぞれ確認します
 7. **ベース言語** を選択します
 8. **「クイックセットアップ：すべてローカライズ」** をクリックします
 
@@ -145,7 +145,7 @@ Canvas外の個別テキストに使用します。
 個別の登録内容を確認・編集する場合：
 
 1. `InteractionLocalizer` を選択します
-2. **「Interaction Textをスキャン」** をクリックします
+2. **「Interactionをスキャン」** をクリックします
 3. フィルターや一括ボタンを使って対象を含める／除外します
 4. 必要に応じて翻訳キーを編集します
 5. **「JSONにエクスポートして適用」** をクリックします
@@ -304,9 +304,11 @@ UdonやPickupのInteraction Textを一か所で管理します。
 
 - **Interaction Text**：UdonSharpBehaviourとVRCPickupのInteraction Textを対象に追加
 - **除外条件**：検索とローカライズ処理から除外するキーワードとルートGameObjectを指定
-- **未ローカライズのテキストを検索**：シーンをスキャンし、CanvasとInteractionTextを個別表示
+- **未ローカライズのテキストを検索**：シーンをスキャンし、CanvasとInteractionを個別表示
 - **クイックセットアップ**：CanvasとInteraction Textをまとめて設定
 - **除外キーワード**：新しいCanvasLocalizerへコピーする共通キーワード一覧
+- **不足JSONを復元**：不足キーを復元し、CanvasとInteractionの変更された元テキストを同期
+- **JSON削除**：Canvas専用のキーだけを削除し、未反映の変更がある間は無効
 - **自動翻訳**：MyMemory APIで未翻訳言語を翻訳
 - **プレビュー**：Play Modeを使用せず翻訳を確認
 - **Dropdown**：言語選択Dropdownを設定
@@ -334,6 +336,7 @@ JSONにすでに存在するキーは削除しません。
 
 文脈によって異なる翻訳が必要な場合は、項目ごとに正規キーの共有を解除できます。
 共有しているテキストが変更された場合は、他の使用箇所に影響しない独立したキーへ分離されます。
+このため、変更していないCanvasやInteractionのキーと既存翻訳は維持されます。
 
 Canvas IDと新しい翻訳キーは、シーンのHierarchyに基づく一定の順序で生成されます。
 Hierarchyと関連オブジェクトの構成が変わらなければ、Localizerを作り直しても

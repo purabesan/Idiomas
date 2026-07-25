@@ -101,7 +101,7 @@ Si tienes varios Canvas o Interaction Text sin localizar:
 3. Configura las **Condiciones de exclusion** si es necesario
 4. Abre **Buscar Textos sin Localizar**
 5. Clic en **"Escanear Escena"**
-6. Revisa por separado las listas **Canvas** e **InteractionText**
+6. Revisa por separado las listas **Canvas** e **Interaction**
 7. Selecciona el **Idioma Base**
 8. Clic en **"Configuracion Rapida: Localizar Todo"**
 
@@ -146,7 +146,7 @@ una gran cantidad de textos innecesarios.
 Para revisar o modificar cada entrada:
 
 1. Selecciona el `InteractionLocalizer`
-2. Clic en **"Escanear Interaction Text"**
+2. Clic en **"Escanear Interaction"**
 3. Usa el filtro o los botones de inclusion y exclusion
 4. Edita las claves si es necesario
 5. Clic en **"Exportar al JSON y Aplicar"**
@@ -299,9 +299,11 @@ Al iniciar, el sistema detecta el idioma del jugador:
 ### Inspector del LocalizationManager
 - **Interaction Text**: incluye los textos de interaccion de UdonSharpBehaviour y VRCPickup
 - **Condiciones de exclusion**: define palabras clave y GameObjects raiz que deben quedar fuera de la busqueda y del proceso de localizacion
-- **Buscar Textos sin Localizar**: escanea la escena y muestra por separado Canvas e InteractionText
+- **Buscar Textos sin Localizar**: escanea la escena y muestra por separado Canvas e Interaction
 - **Configuracion Rapida**: configura Canvas e Interaction Text de una vez
 - **Palabras clave de exclusion**: permite definir una lista comun que se copia a los nuevos CanvasLocalizer durante la configuracion rapida
+- **Restaurar JSON Faltantes**: restaura claves ausentes y sincroniza los textos de origen modificados de Canvas e Interaction
+- **Eliminar claves JSON**: elimina solamente las claves exclusivas del Canvas; permanece desactivado mientras haya cambios pendientes
 - **Auto-Traducir**: traduce idiomas faltantes con MyMemory API
 - **Vista Previa**: muestra traducciones sin entrar en Play Mode
 - **Dropdown**: configuracion del selector de idioma
@@ -326,7 +328,7 @@ automatica.
 La opcion se puede desactivar individualmente cuando dos textos iguales necesitan
 traducciones diferentes por su contexto. Si un texto que comparte clave cambia,
 se separa automaticamente en una clave independiente para no modificar los otros
-usos.
+usos ni sus traducciones existentes.
 
 Los IDs de Canvas y las nuevas claves se generan utilizando un orden determinista
 basado en la jerarquia de la escena. Si la jerarquia y los objetos relevantes no
