@@ -398,7 +398,8 @@ public class InteractionLocalizerEditor : Editor
 
     private static void ReconcileTranslationKeys(
         List<Entry> entries,
-        Dictionary<string, string> baseEntries)
+        Dictionary<string, string> baseEntries,
+        HashSet<string> orphanCandidates = null)
     {
         if (entries == null || baseEntries == null) return;
 
@@ -447,9 +448,10 @@ public class InteractionLocalizerEditor : Editor
                 GetReferenceCount(referenceCounts, oldKey) > 1)
             {
                 string detachedKey = GenerateDetachedKey(
-                    oldKey, reservedKeys, referenceCounts);
+                    BuildNativeKey(entry), reservedKeys, referenceCounts);
                 ChangeEntryKey(
                     entry, detachedKey, referenceCounts, reservedKeys);
+                orphanCandidates?.Add(oldKey);
             }
 
             if (!string.IsNullOrEmpty(entry.text) &&
@@ -490,19 +492,32 @@ public class InteractionLocalizerEditor : Editor
     }
 
     private static string GenerateDetachedKey(
-        string originalKey,
+        string nativeKey,
         HashSet<string> reservedKeys,
         Dictionary<string, int> referenceCounts)
     {
         int suffix = 2;
-        string candidate = originalKey + "_" + suffix;
+        string candidate = nativeKey;
         while (reservedKeys.Contains(candidate) ||
             GetReferenceCount(referenceCounts, candidate) > 0)
         {
+            candidate = nativeKey + "_" + suffix;
             suffix++;
-            candidate = originalKey + "_" + suffix;
         }
         return candidate;
+    }
+
+    private static string BuildNativeKey(Entry entry)
+    {
+        Component component = entry.target as Component;
+        string objectName = IdiomasEditorUtils.NormalizeName(
+            component != null ? component.gameObject.name : "object");
+        if (string.IsNullOrEmpty(objectName)) objectName = "object";
+        if (entry.type == EntryType.PickupInteraction)
+            return "pickup_interaction_" + objectName;
+        if (entry.type == EntryType.PickupUse)
+            return "pickup_use_" + objectName;
+        return "interaction_" + objectName;
     }
 
     private static void AddScannedEntry(
@@ -583,9 +598,52 @@ public class InteractionLocalizerEditor : Editor
         if (!translations.ContainsKey(baseLang))
             translations[baseLang] = new Dictionary<string, string>();
 
-        ReconcileTranslationKeys(entries, translations[baseLang]);
+        Dictionary<Entry, string> originalKeys =
+            new Dictionary<Entry, string>();
+        List<Entry> modifiedEntries = new List<Entry>();
+        for (int i = 0; i < entries.Count; i++)
+        {
+            Entry entry = entries[i];
+            originalKeys[entry] = entry.key;
+            if (entry.enabled &&
+                translations[baseLang].TryGetValue(
+                    entry.key, out string storedText) &&
+                storedText != entry.text)
+            {
+                modifiedEntries.Add(entry);
+            }
+        }
+
+        HashSet<string> orphanCandidates = new HashSet<string>();
+        ReconcileTranslationKeys(
+            entries, translations[baseLang], orphanCandidates);
+        int translationsToInvalidate = 0;
+        for (int i = 0; i < modifiedEntries.Count; i++)
+        {
+            Entry entry = modifiedEntries[i];
+            if (entry.key == originalKeys[entry])
+                translationsToInvalidate++;
+        }
+
+        bool clearModifiedTranslations = false;
+        if (translationsToInvalidate > 0)
+        {
+            int result = EditorUtility.DisplayDialogComplex(
+                S("mgr_sync_modified_title"),
+                string.Format(
+                    S("mgr_sync_modified_msg"),
+                    translationsToInvalidate),
+                S("mgr_sync_clear_translations"),
+                S("cancel"),
+                S("mgr_sync_keep_translations"));
+            if (result == 1) return;
+            clearModifiedTranslations = result == 0;
+        }
+
         WriteEntries(entries);
         serializedObject.ApplyModifiedProperties();
+        RemoveOrphanedKeysWithConfirmation(
+            translations, orphanCandidates);
 
         Dictionary<string, string> canonicalByText =
             new Dictionary<string, string>(System.StringComparer.Ordinal);
@@ -604,6 +662,18 @@ public class InteractionLocalizerEditor : Editor
             Entry entry = entries[i];
             if (!entry.enabled || string.IsNullOrWhiteSpace(entry.key))
                 continue;
+            if (clearModifiedTranslations &&
+                originalKeys.TryGetValue(entry, out string originalKey) &&
+                entry.key == originalKey &&
+                modifiedEntries.Contains(entry))
+            {
+                foreach (KeyValuePair<string, Dictionary<string, string>>
+                    language in translations)
+                {
+                    if (language.Key != baseLang)
+                        language.Value.Remove(entry.key);
+                }
+            }
             if (canonicalByText.TryGetValue(
                 entry.text, out string canonicalKey))
             {
@@ -629,6 +699,41 @@ public class InteractionLocalizerEditor : Editor
         Debug.Log(
             $"[Idiomas] Interaction Text exportado: {exported}, " +
             $"idioma base \"{baseLang}\".");
+    }
+
+    private static int RemoveOrphanedKeysWithConfirmation(
+        Dictionary<string, Dictionary<string, string>> translations,
+        HashSet<string> candidates)
+    {
+        List<string> keys = new List<string>();
+        foreach (string key in candidates)
+        {
+            if (IdiomasEditorUtils.CountSceneTranslationKeyReferences(key) > 0)
+                continue;
+            foreach (Dictionary<string, string> language in translations.Values)
+            {
+                if (language.ContainsKey(key))
+                {
+                    keys.Add(key);
+                    break;
+                }
+            }
+        }
+        if (keys.Count == 0) return 0;
+        if (!EditorUtility.DisplayDialog(
+            S("mgr_orphan_keys_title"),
+            string.Format(S("mgr_orphan_keys_msg"), keys.Count),
+            S("mgr_orphan_keys_delete"),
+            S("mgr_orphan_keys_keep")))
+        {
+            return 0;
+        }
+        for (int i = 0; i < keys.Count; i++)
+        {
+            foreach (Dictionary<string, string> language in translations.Values)
+                language.Remove(keys[i]);
+        }
+        return keys.Count;
     }
 
     private void RegisterWithManager(SerializedObject managerSO)

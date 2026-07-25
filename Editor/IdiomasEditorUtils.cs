@@ -3,6 +3,7 @@ using UnityEngine;
 using UdonSharp;
 using UdonSharpEditor;
 using VRC.Udon;
+using VRC.SDK3.Components;
 using VRC.SDK3.Data;
 using System.Collections.Generic;
 using System.Text;
@@ -16,6 +17,129 @@ using BenderDios.Idiomas;
 /// </summary>
 public static class IdiomasEditorUtils
 {
+    /// <summary>
+    /// Construye el indice texto original -> clave canonica. El JSON del
+    /// idioma base tiene prioridad; los Localizer de la escena solo completan
+    /// entradas que faltan en el archivo.
+    /// </summary>
+    public static Dictionary<string, string> BuildCanonicalKeyIndex(
+        string baseLanguage,
+        Dictionary<string, Dictionary<string, string>> translations)
+    {
+        Dictionary<string, string> result =
+            new Dictionary<string, string>(System.StringComparer.Ordinal);
+        if (translations != null &&
+            translations.TryGetValue(
+                baseLanguage, out Dictionary<string, string> baseEntries))
+        {
+            List<string> keys = new List<string>(baseEntries.Keys);
+            keys.Sort(System.StringComparer.Ordinal);
+            for (int i = 0; i < keys.Count; i++)
+            {
+                string value = baseEntries[keys[i]];
+                if (!string.IsNullOrEmpty(value) &&
+                    !result.ContainsKey(value))
+                {
+                    result[value] = keys[i];
+                }
+            }
+        }
+
+        CanvasLocalizer[] canvases = Object.FindObjectsByType<CanvasLocalizer>(
+            FindObjectsInactive.Include, FindObjectsSortMode.None);
+        for (int i = 0; i < canvases.Length; i++)
+        {
+            if (canvases[i].GetBaseLanguage() != baseLanguage) continue;
+            SerializedObject so = new SerializedObject(canvases[i]);
+            AddCanvasCanonicalEntries(
+                so.FindProperty("tmpTexts"), so.FindProperty("tmpKeys"),
+                result);
+            AddCanvasCanonicalEntries(
+                so.FindProperty("legacyTexts"),
+                so.FindProperty("legacyKeys"), result);
+        }
+
+        InteractionLocalizer[] interactions =
+            Object.FindObjectsByType<InteractionLocalizer>(
+                FindObjectsInactive.Include, FindObjectsSortMode.None);
+        for (int i = 0; i < interactions.Length; i++)
+        {
+            if (interactions[i].GetBaseLanguage() != baseLanguage) continue;
+            SerializedObject so = new SerializedObject(interactions[i]);
+            AddInteractionCanonicalEntries(
+                so.FindProperty("interactTargets"),
+                so.FindProperty("interactKeys"),
+                so.FindProperty("interactEnabled"), false, result);
+            AddInteractionCanonicalEntries(
+                so.FindProperty("pickupInteractionTargets"),
+                so.FindProperty("pickupInteractionKeys"),
+                so.FindProperty("pickupInteractionEnabled"), false, result);
+            AddInteractionCanonicalEntries(
+                so.FindProperty("pickupUseTargets"),
+                so.FindProperty("pickupUseKeys"),
+                so.FindProperty("pickupUseEnabled"), true, result);
+        }
+        return result;
+    }
+
+    private static void AddCanvasCanonicalEntries(
+        SerializedProperty targets, SerializedProperty keys,
+        Dictionary<string, string> result)
+    {
+        if (targets == null || keys == null) return;
+        int count = Mathf.Min(targets.arraySize, keys.arraySize);
+        for (int i = 0; i < count; i++)
+        {
+            Component component =
+                targets.GetArrayElementAtIndex(i).objectReferenceValue
+                    as Component;
+            string key = keys.GetArrayElementAtIndex(i).stringValue;
+            string text = "";
+            if (component is TMPro.TextMeshProUGUI tmp) text = tmp.text;
+            else if (component is UnityEngine.UI.Text legacy)
+                text = legacy.text;
+            if (!string.IsNullOrEmpty(text) &&
+                !string.IsNullOrEmpty(key) && !result.ContainsKey(text))
+            {
+                result[text] = key;
+            }
+        }
+    }
+
+    private static void AddInteractionCanonicalEntries(
+        SerializedProperty targets, SerializedProperty keys,
+        SerializedProperty enabled, bool useText,
+        Dictionary<string, string> result)
+    {
+        if (targets == null || keys == null) return;
+        int count = Mathf.Min(targets.arraySize, keys.arraySize);
+        for (int i = 0; i < count; i++)
+        {
+            if (enabled != null && i < enabled.arraySize &&
+                !enabled.GetArrayElementAtIndex(i).boolValue)
+            {
+                continue;
+            }
+            Object target =
+                targets.GetArrayElementAtIndex(i).objectReferenceValue;
+            string key = keys.GetArrayElementAtIndex(i).stringValue;
+            string text = "";
+            if (target is VRCPickup pickup)
+                text = useText ? pickup.UseText : pickup.InteractionText;
+            else if (target is UdonSharpBehaviour behaviour)
+            {
+                UdonBehaviour backing = FindUdonBehaviourFor(behaviour);
+                text = backing != null ? backing.InteractionText :
+                    behaviour.InteractionText;
+            }
+            if (!string.IsNullOrEmpty(text) &&
+                !string.IsNullOrEmpty(key) && !result.ContainsKey(text))
+            {
+                result[text] = key;
+            }
+        }
+    }
+
     // =====================================================================
     // JSON: Parseo
     // =====================================================================
