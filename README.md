@@ -200,6 +200,16 @@ Menu: `Tools > Idiomas > Exportar-Importar CSV`
 Permite exportar las traducciones a CSV para editarlas en Google Sheets o Excel,
 y luego importarlas de vuelta al JSON. Util para colaborar con traductores.
 
+Exportar un CSV antes de ejecutar la traduccion automatica, volver a escanear la
+escena o sincronizar el JSON tambien permite usarlo como una copia de seguridad
+facil de revisar. Idiomas no modifica un CSV ya exportado durante sus operaciones
+normales, a menos que vuelvas a seleccionar el mismo archivo como destino de una
+exportacion.
+
+Para datos de traduccion importantes, se recomienda combinar esta copia de
+seguridad de trabajo en CSV con el control de versiones del archivo JSON mediante
+Git u otra herramienta.
+
 ### Limpiar componentes de la escena
 
 Menu: `Tools > Idiomas > Cleanup Scene Components`
