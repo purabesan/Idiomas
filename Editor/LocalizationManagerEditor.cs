@@ -37,8 +37,8 @@ public class LocalizationManagerEditor : Editor
     // Estado del editor (foldouts)
     private bool _showCanvasSearch = true;
     private bool _showExclusionConditions = false;
-    private bool _showCanvasResults = true;
-    private bool _showInteractionResults = true;
+    private bool _showCanvasResults = false;
+    private bool _showInteractionResults = false;
     private bool _showTools = false;
     private bool _showListeners = false;
     private bool _showDropdown = false;
@@ -48,13 +48,45 @@ public class LocalizationManagerEditor : Editor
     private static List<InteractionSearchResult> _interactionSearchResults;
     private static int _interactionDetectedObjectCount;
     private static int _interactionRegisteredObjectCount;
-    private int _quickSetupLangIndex = 0; // Default: "en" (indice en IdiomasLanguages.Codes)
+    private const string QUICK_SETUP_LANGUAGE_SESSION_KEY =
+        "Idiomas.QuickSetupBaseLanguage";
+    private string _quickSetupBaseLanguage = "en";
 
     // Cache del JSON
     private DataDictionary _cachedData;
     private string _cachedJsonHash;
     private string[] _cachedLanguages;
     private string[] _cachedKeys;
+    private Dictionary<string, Dictionary<string, string>>
+        _cachedTranslations;
+    private Dictionary<string, int> _sceneKeyReferenceCounts;
+    private bool _sceneKeyReferenceCountsDirty = true;
+    private TranslationFileStamp _translationFileStamp;
+    private bool _hasTranslationFileStamp;
+    private bool _translationFileStateDirty = true;
+    private ScanResultSummary _scanResultSummary;
+
+    private struct TranslationFileStamp
+    {
+        public string assetPath;
+        public string guid;
+        public Hash128 dependencyHash;
+        public long creationTimeTicks;
+        public long lastWriteTimeTicks;
+        public long fileLength;
+        public int instanceId;
+    }
+
+    private class ScanResultSummary
+    {
+        public int canvasCandidateCount;
+        public int canvasCandidateTextCount;
+        public int localizedCanvasCount;
+        public int noTextCanvasCount;
+        public int interactionTextCount;
+        public int interactionObjectCount;
+        public bool hasInvalidInteractionKeys;
+    }
 
     // Shortcut para traducciones del editor
     private static string S(string key) => IdiomasEditorStrings.Get(key);
@@ -106,6 +138,10 @@ public class LocalizationManagerEditor : Editor
         _dropdownLanguageCodes = serializedObject.FindProperty("_dropdownLanguageCodes");
         _listeners = serializedObject.FindProperty("_listeners");
         MigrateLegacyExcludedKeywords();
+        _quickSetupBaseLanguage = SessionState.GetString(
+            QUICK_SETUP_LANGUAGE_SESSION_KEY, "en");
+        if (IdiomasLanguages.IndexOf(_quickSetupBaseLanguage) < 0)
+            _quickSetupBaseLanguage = "en";
 
         // Limpiar resultados de escaneo anteriores para evitar
         // MissingReferenceException por GameObjects destruidos
@@ -114,6 +150,22 @@ public class LocalizationManagerEditor : Editor
         _interactionSearchResults = null;
         _interactionDetectedObjectCount = 0;
         _interactionRegisteredObjectCount = 0;
+        _scanResultSummary = null;
+        InvalidateSceneKeyReferenceCounts();
+        EditorApplication.hierarchyChanged +=
+            InvalidateSceneKeyReferenceCounts;
+        EditorApplication.projectChanged +=
+            MarkTranslationFileStateDirty;
+        Undo.undoRedoPerformed += InvalidateSceneKeyReferenceCounts;
+    }
+
+    private void OnDisable()
+    {
+        EditorApplication.hierarchyChanged -=
+            InvalidateSceneKeyReferenceCounts;
+        EditorApplication.projectChanged -=
+            MarkTranslationFileStateDirty;
+        Undo.undoRedoPerformed -= InvalidateSceneKeyReferenceCounts;
     }
 
     private void MigrateLegacyExcludedKeywords()
@@ -166,8 +218,15 @@ public class LocalizationManagerEditor : Editor
 
         // === CONFIGURACION BASICA ===
         EditorGUILayout.BeginHorizontal();
+        Object previousTranslationFile =
+            _translationFile.objectReferenceValue;
         EditorGUILayout.PropertyField(_translationFile,
             new GUIContent(S("mgr_translation_file")));
+        if (_translationFile.objectReferenceValue !=
+            previousTranslationFile)
+        {
+            ResetTranslationState();
+        }
 
         bool hasJson = _translationFile.objectReferenceValue != null;
         string createBtnLabel = hasJson ? S("mgr_create_new") : S("mgr_create_json");
@@ -222,6 +281,7 @@ public class LocalizationManagerEditor : Editor
 
         // === TEXTOS DE INTERACCION ===
         EditorGUILayout.Space(5);
+        EditorGUI.BeginChangeCheck();
         EditorGUILayout.PropertyField(
             _includeInteractionTexts,
             new GUIContent("Interaction Text"));
@@ -230,6 +290,14 @@ public class LocalizationManagerEditor : Editor
             _includeDefaultUseText,
             new GUIContent("Default \"Use\""));
         EditorGUI.EndDisabledGroup();
+        if (EditorGUI.EndChangeCheck())
+        {
+            _canvasSearchResults = null;
+            _interactionSearchResults = null;
+            _interactionDetectedObjectCount = 0;
+            _interactionRegisteredObjectCount = 0;
+            _scanResultSummary = null;
+        }
         EditorGUILayout.HelpBox(S("mgr_interaction_info"), MessageType.Info);
 
         // === CONDICIONES DE EXCLUSION ===
@@ -617,12 +685,13 @@ public class LocalizationManagerEditor : Editor
             manager,
             localizer,
             group,
-            IdiomasLanguages.Codes[_quickSetupLangIndex]);
+            _quickSetupBaseLanguage);
         _interactionSearchResults.RemoveAll(result =>
         {
             Component component = result.target as Component;
             return component != null && component.gameObject == owner;
         });
+        RefreshScanResultSummary();
         serializedObject.ApplyModifiedProperties();
         EditorGUIUtility.PingObject(owner);
     }
@@ -1422,6 +1491,63 @@ public class LocalizationManagerEditor : Editor
         return false;
     }
 
+    private void RefreshScanResultSummary()
+    {
+        if (_canvasSearchResults == null)
+        {
+            _scanResultSummary = null;
+            return;
+        }
+
+        ScanResultSummary summary = new ScanResultSummary();
+        for (int i = _canvasSearchResults.Count - 1; i >= 0; i--)
+        {
+            CanvasSearchResult result = _canvasSearchResults[i];
+            if (result == null || result.gameObject == null)
+            {
+                _canvasSearchResults.RemoveAt(i);
+                continue;
+            }
+
+            int textCount = result.tmpCount + result.legacyCount;
+            int pendingTextCount = result.hasCanvasLocalizer
+                ? result.missingTextCount
+                : textCount;
+            if (pendingTextCount > 0)
+            {
+                summary.canvasCandidateCount++;
+                summary.canvasCandidateTextCount += pendingTextCount;
+            }
+            if (result.hasCanvasLocalizer)
+                summary.localizedCanvasCount++;
+            else if (textCount == 0)
+                summary.noTextCanvasCount++;
+        }
+
+        if (_includeInteractionTexts.boolValue &&
+            _interactionSearchResults != null)
+        {
+            HashSet<GameObject> owners = new HashSet<GameObject>();
+            HashSet<string> keys = new HashSet<string>();
+            for (int i = 0; i < _interactionSearchResults.Count; i++)
+            {
+                InteractionSearchResult result =
+                    _interactionSearchResults[i];
+                if (!result.include) continue;
+                summary.interactionTextCount++;
+                Component component = result.target as Component;
+                if (component != null) owners.Add(component.gameObject);
+                if (string.IsNullOrWhiteSpace(result.translationKey) ||
+                    !keys.Add(result.translationKey))
+                {
+                    summary.hasInvalidInteractionKeys = true;
+                }
+            }
+            summary.interactionObjectCount = owners.Count;
+        }
+        _scanResultSummary = summary;
+    }
+
     private int CountIncludedInteractionTexts()
     {
         if (!_includeInteractionTexts.boolValue || _interactionSearchResults == null)
@@ -1666,7 +1792,7 @@ public class LocalizationManagerEditor : Editor
             if (baseLanguageProperty != null)
             {
                 baseLanguageProperty.stringValue =
-                    IdiomasLanguages.Codes[_quickSetupLangIndex];
+                    _quickSetupBaseLanguage;
             }
             localizerSO.ApplyModifiedProperties();
             SetRegisteredInteractionLocalizer(localizer);
@@ -2003,6 +2129,7 @@ public class LocalizationManagerEditor : Editor
 
     private void ScanSceneForCanvas()
     {
+        InvalidateSceneKeyReferenceCounts();
         _canvasSearchResults = new List<CanvasSearchResult>();
         Canvas[] allCanvas = FindObjectsByType<Canvas>(FindObjectsInactive.Include, FindObjectsSortMode.None);
 
@@ -2102,36 +2229,24 @@ public class LocalizationManagerEditor : Editor
                 _interactionDetectedObjectCount = 0;
                 _interactionRegisteredObjectCount = 0;
             }
+            RefreshSceneKeyReferenceCounts();
+            RefreshScanResultSummary();
         }
         GUI.backgroundColor = Color.white;
 
-        // Filtrar elementos con GameObjects destruidos (evita MissingReferenceException)
-        if (_canvasSearchResults != null)
-        {
-            _canvasSearchResults.RemoveAll(r => r.gameObject == null);
-        }
-
         // === CONFIGURACION RAPIDA ===
         // Solo mostrar si hay resultados de escaneo con candidatos
-        if (_canvasSearchResults != null)
+        if (_canvasSearchResults != null &&
+            _scanResultSummary != null)
         {
-            int qsCandidateCount = 0;
-            int qsCandidateTextCount = 0;
-            int qsInteractionCount = CountIncludedInteractionTexts();
+            int qsCandidateCount =
+                _scanResultSummary.canvasCandidateCount;
+            int qsCandidateTextCount =
+                _scanResultSummary.canvasCandidateTextCount;
+            int qsInteractionCount =
+                _scanResultSummary.interactionTextCount;
             int qsInteractionObjectCount =
-                CountIncludedInteractionObjects();
-            for (int i = 0; i < _canvasSearchResults.Count; i++)
-            {
-                CanvasSearchResult result = _canvasSearchResults[i];
-                int pendingTextCount = result.hasCanvasLocalizer
-                    ? result.missingTextCount
-                    : result.tmpCount + result.legacyCount;
-                if (pendingTextCount > 0)
-                {
-                    qsCandidateCount++;
-                    qsCandidateTextCount += pendingTextCount;
-                }
-            }
+                _scanResultSummary.interactionObjectCount;
 
             if (qsCandidateCount > 0 || qsInteractionCount > 0)
             {
@@ -2149,9 +2264,24 @@ public class LocalizationManagerEditor : Editor
                     EditorStyles.wordWrappedMiniLabel);
 
                 EditorGUILayout.Space(3);
-                _quickSetupLangIndex = EditorGUILayout.Popup(
+                int quickSetupLanguageIndex =
+                    IdiomasLanguages.IndexOf(_quickSetupBaseLanguage);
+                if (quickSetupLanguageIndex < 0)
+                    quickSetupLanguageIndex = IdiomasLanguages.IndexOf("en");
+                int newQuickSetupLanguageIndex = EditorGUILayout.Popup(
                     new GUIContent(S("mgr_quick_setup_lang"), S("mgr_quick_setup_lang_tooltip")),
-                    _quickSetupLangIndex, IdiomasLanguages.PopupLabelsLatin);
+                    quickSetupLanguageIndex,
+                    IdiomasLanguages.PopupLabelsLatin);
+                if (newQuickSetupLanguageIndex >= 0 &&
+                    newQuickSetupLanguageIndex != quickSetupLanguageIndex)
+                {
+                    _quickSetupBaseLanguage =
+                        IdiomasLanguages.Codes[
+                            newQuickSetupLanguageIndex];
+                    SessionState.SetString(
+                        QUICK_SETUP_LANGUAGE_SESSION_KEY,
+                        _quickSetupBaseLanguage);
+                }
 
                 EditorGUILayout.Space(3);
                 bool interactionLocalizerMissing =
@@ -2159,7 +2289,7 @@ public class LocalizationManagerEditor : Editor
                     GetPrefabInteractionLocalizer(
                         target as LocalizationManager) == null;
                 EditorGUI.BeginDisabledGroup(
-                    HasInvalidInteractionKeys() ||
+                    _scanResultSummary.hasInvalidInteractionKeys ||
                     interactionLocalizerMissing);
                 GUI.backgroundColor = new Color(0.3f, 0.9f, 0.5f);
                 if (GUILayout.Button(
@@ -2194,36 +2324,19 @@ public class LocalizationManagerEditor : Editor
             return;
         }
 
-        // Contar candidatos vs ya localizados
-        int candidates = 0;
-        int alreadyLocalized = 0;
-        int noTexts = 0;
-        for (int i = 0; i < _canvasSearchResults.Count; i++)
-        {
-            if (_canvasSearchResults[i].hasCanvasLocalizer) alreadyLocalized++;
-            else if (_canvasSearchResults[i].tmpCount + _canvasSearchResults[i].legacyCount == 0) noTexts++;
-            else candidates++;
-            if (_canvasSearchResults[i].hasCanvasLocalizer &&
-                _canvasSearchResults[i].missingTextCount > 0)
-            {
-                candidates++;
-            }
-        }
-
         if (_canvasSearchResults.Count > 0 ||
             _interactionDetectedObjectCount > 0)
         {
-            int interactionCandidates =
-                CountIncludedInteractionObjects();
             EditorGUILayout.LabelField(
                 string.Format(
                     S("mgr_found_summary"),
                     _canvasSearchResults.Count,
                     _interactionDetectedObjectCount,
-                    candidates + interactionCandidates,
-                    alreadyLocalized +
+                    _scanResultSummary.canvasCandidateCount +
+                        _scanResultSummary.interactionObjectCount,
+                    _scanResultSummary.localizedCanvasCount +
                         _interactionRegisteredObjectCount,
-                    noTexts),
+                    _scanResultSummary.noTextCanvasCount),
                 EditorStyles.helpBox);
         }
 
@@ -2319,11 +2432,11 @@ public class LocalizationManagerEditor : Editor
             List<string> clKeys = GetCanvasLocalizerKeys(cl);
             int keysInJson = CountKeysInJson(clKeys);
             int totalKeys = clKeys.Count;
-            List<string> deletableKeys =
-                GetDeletableCanvasKeys(cl, clKeys);
+            List<string> deletableKeys;
+            int sharedKeyCount;
+            GetCanvasKeyUsage(
+                clKeys, out deletableKeys, out sharedKeyCount);
             int deletableKeyCount = deletableKeys.Count;
-            int sharedKeyCount =
-                CountSharedCanvasKeys(cl, clKeys);
             Dictionary<string, string> canvasBaseEntries =
                 GetCanvasBaseLanguageEntries(cl);
             List<RegisteredCanvasEntry> canvasEntries =
@@ -2473,7 +2586,9 @@ public class LocalizationManagerEditor : Editor
 
         InteractionLocalizer interactionLocalizer =
             GetPrefabInteractionLocalizer(target as LocalizationManager);
-        int interactionCandidateCount = CountIncludedInteractionTexts();
+        int interactionCandidateCount = _scanResultSummary != null
+            ? _scanResultSummary.interactionTextCount
+            : 0;
         if (_includeInteractionTexts.boolValue ||
             interactionLocalizer != null ||
             interactionCandidateCount > 0)
@@ -2566,6 +2681,7 @@ public class LocalizationManagerEditor : Editor
                 S("mgr_no_translatable_title"),
                 S("mgr_no_translatable_msg"), S("ok"));
             ScanSceneForCanvas();
+            RefreshScanResultSummary();
             return;
         }
 
@@ -2617,6 +2733,7 @@ public class LocalizationManagerEditor : Editor
 
         // Marcar resultado como ya localizado
         result.hasCanvasLocalizer = true;
+        RefreshScanResultSummary();
 
         EditorUtility.SetDirty(go);
 
@@ -2713,40 +2830,109 @@ public class LocalizationManagerEditor : Editor
             }
         }
 
-        return IdiomasEditorUtils.CountSceneTranslationKeyReferences(key) >
+        return GetSceneTranslationKeyReferenceCount(key) >
             referencesInExcludedLocalizer;
     }
 
-    private List<string> GetDeletableCanvasKeys(
-        CanvasLocalizer localizer, List<string> keys)
+    private void InvalidateSceneKeyReferenceCounts()
     {
-        List<string> deletable = new List<string>();
-        for (int i = 0; i < keys.Count; i++)
-        {
-            List<string> singleKey = new List<string> { keys[i] };
-            if (CountKeysInJson(singleKey) > 0 &&
-                !IsTranslationKeyUsedElsewhere(keys[i], localizer))
-            {
-                deletable.Add(keys[i]);
-            }
-        }
-        return deletable;
+        _sceneKeyReferenceCountsDirty = true;
     }
 
-    private int CountSharedCanvasKeys(
-        CanvasLocalizer localizer, List<string> keys)
+    private void MarkTranslationFileStateDirty()
     {
-        int shared = 0;
+        _translationFileStateDirty = true;
+    }
+
+    private void ResetTranslationState()
+    {
+        ClearTranslationJsonCache();
+        _canvasSearchResults = null;
+        _interactionSearchResults = null;
+        _interactionDetectedObjectCount = 0;
+        _interactionRegisteredObjectCount = 0;
+        _scanResultSummary = null;
+        _hasTranslationFileStamp = false;
+        _translationFileStateDirty = true;
+        InvalidateSceneKeyReferenceCounts();
+    }
+
+    private void ClearTranslationJsonCache()
+    {
+        _cachedData = null;
+        _cachedLanguages = null;
+        _cachedKeys = null;
+        _cachedTranslations = null;
+        _cachedJsonHash = null;
+    }
+
+    private int GetSceneTranslationKeyReferenceCount(string key)
+    {
+        if (string.IsNullOrEmpty(key)) return 0;
+        RefreshSceneKeyReferenceCounts();
+        return _sceneKeyReferenceCounts.TryGetValue(
+            key, out int count) ? count : 0;
+    }
+
+    private void RefreshSceneKeyReferenceCounts()
+    {
+        if (!_sceneKeyReferenceCountsDirty &&
+            _sceneKeyReferenceCounts != null)
+        {
+            return;
+        }
+
+        _sceneKeyReferenceCounts =
+            IdiomasEditorUtils.BuildSceneTranslationKeyReferenceCounts();
+        _sceneKeyReferenceCountsDirty = false;
+    }
+
+    private void GetCanvasKeyUsage(
+        List<string> keys, out List<string> deletable,
+        out int shared)
+    {
+        deletable = new List<string>();
+        shared = 0;
+        Dictionary<string, int> localReferences =
+            new Dictionary<string, int>(System.StringComparer.Ordinal);
         for (int i = 0; i < keys.Count; i++)
         {
-            List<string> singleKey = new List<string> { keys[i] };
-            if (CountKeysInJson(singleKey) > 0 &&
-                IsTranslationKeyUsedElsewhere(keys[i], localizer))
-            {
+            string key = keys[i];
+            if (string.IsNullOrEmpty(key)) continue;
+            if (localReferences.TryGetValue(key, out int count))
+                localReferences[key] = count + 1;
+            else
+                localReferences[key] = 1;
+        }
+
+        foreach (KeyValuePair<string, int> pair in localReferences)
+        {
+            if (!IsKeyInJson(pair.Key)) continue;
+            if (GetSceneTranslationKeyReferenceCount(pair.Key) > pair.Value)
                 shared++;
+            else
+                deletable.Add(pair.Key);
+        }
+    }
+
+    private bool IsKeyInJson(string key)
+    {
+        if (_cachedData == null || _cachedLanguages == null ||
+            string.IsNullOrEmpty(key))
+        {
+            return false;
+        }
+        for (int i = 0; i < _cachedLanguages.Length; i++)
+        {
+            if (_cachedData.TryGetValue(
+                    _cachedLanguages[i], out DataToken language) &&
+                language.TokenType == TokenType.DataDictionary &&
+                language.DataDictionary.ContainsKey(key))
+            {
+                return true;
             }
         }
-        return shared;
+        return false;
     }
 
     private void RemoveKeysFromJson(CanvasLocalizer cl, List<string> keys, int keysInJson)
@@ -2880,6 +3066,7 @@ public class LocalizationManagerEditor : Editor
 
         int appended = CanvasLocalizerEditor.AppendMissingTexts(
             cl, cl.GetBaseLanguage(), translations);
+        if (appended > 0) InvalidateSceneKeyReferenceCounts();
         SourceTranslationUpdateMode updateMode =
             ConfirmModifiedSourceTexts(
                 CountModifiedCanvasEntries(cl, translations));
@@ -3100,6 +3287,7 @@ public class LocalizationManagerEditor : Editor
 
         localizerSO.ApplyModifiedProperties();
         EditorUtility.SetDirty(localizer);
+        if (reassigned > 0) InvalidateSceneKeyReferenceCounts();
         return updated + reassigned;
     }
 
@@ -3203,19 +3391,11 @@ public class LocalizationManagerEditor : Editor
     private Dictionary<string, string> GetInteractionBaseLanguageEntries(
         InteractionLocalizer localizer)
     {
-        TextAsset textAsset = _translationFile.objectReferenceValue as TextAsset;
-        if (textAsset == null || localizer == null)
+        if (_cachedTranslations == null || localizer == null)
             return new Dictionary<string, string>();
 
-        string path = AssetDatabase.GetAssetPath(textAsset);
-        if (string.IsNullOrEmpty(path))
-            return new Dictionary<string, string>();
-
-        var translations = IdiomasEditorUtils.ParseJsonToDictionary(
-            File.ReadAllText(Path.GetFullPath(path), Encoding.UTF8));
         string baseLanguage = localizer.GetBaseLanguage();
-        if (translations != null &&
-            translations.TryGetValue(
+        if (_cachedTranslations.TryGetValue(
                 baseLanguage, out Dictionary<string, string> entries))
         {
             return entries;
@@ -3226,17 +3406,11 @@ public class LocalizationManagerEditor : Editor
     private Dictionary<string, string> GetCanvasBaseLanguageEntries(
         CanvasLocalizer localizer)
     {
-        TextAsset textAsset = _translationFile.objectReferenceValue as TextAsset;
-        if (textAsset == null || localizer == null)
+        if (_cachedTranslations == null || localizer == null)
             return new Dictionary<string, string>();
-        string path = AssetDatabase.GetAssetPath(textAsset);
-        if (string.IsNullOrEmpty(path))
-            return new Dictionary<string, string>();
-        var translations = IdiomasEditorUtils.ParseJsonToDictionary(
-            File.ReadAllText(Path.GetFullPath(path), Encoding.UTF8));
+
         string baseLanguage = localizer.GetBaseLanguage();
-        if (translations != null &&
-            translations.TryGetValue(
+        if (_cachedTranslations.TryGetValue(
                 baseLanguage, out Dictionary<string, string> entries))
         {
             return entries;
@@ -3363,6 +3537,7 @@ public class LocalizationManagerEditor : Editor
 
         localizerSO.ApplyModifiedProperties();
         EditorUtility.SetDirty(localizer);
+        if (reassigned > 0) InvalidateSceneKeyReferenceCounts();
         Debug.Log(
             $"[Idiomas] Interaction Text sincronizado: {updated} claves, " +
             $"{reassigned} reasignadas, " +
@@ -3718,6 +3893,7 @@ public class LocalizationManagerEditor : Editor
             modifiedSourceTexts += CountModifiedCanvasEntries(
                 localizers[i], translations);
         }
+        if (totalAdded > 0) InvalidateSceneKeyReferenceCounts();
         for (int i = 0; i < interactionLocalizers.Count; i++)
         {
             modifiedSourceTexts += CountModifiedInteractionEntries(
@@ -3931,6 +4107,8 @@ public class LocalizationManagerEditor : Editor
             _interactionDetectedObjectCount = 0;
             _interactionRegisteredObjectCount = 0;
         }
+        RefreshSceneKeyReferenceCounts();
+        RefreshScanResultSummary();
 
         Debug.Log(
             $"[Idiomas] Eliminados {removed} CanvasLocalizer, limpiados " +
@@ -3997,7 +4175,7 @@ public class LocalizationManagerEditor : Editor
         int interactionObjectCount,
         int interactionTextCount)
     {
-        string baseLang = IdiomasLanguages.Codes[_quickSetupLangIndex];
+        string baseLang = _quickSetupBaseLanguage;
         string langName = IdiomasLanguages.GetNativeName(baseLang);
 
         if (!EditorUtility.DisplayDialog(
@@ -4118,6 +4296,7 @@ public class LocalizationManagerEditor : Editor
                 existing, baseLang, translations);
             if (appended > 0)
             {
+                InvalidateSceneKeyReferenceCounts();
                 totalTexts += appended;
                 processedCanvas++;
                 result.missingTextCount = 0;
@@ -4171,6 +4350,7 @@ public class LocalizationManagerEditor : Editor
                 // Quitar solo los resultados procesados. Los que el usuario
                 // dejo fuera permanecen visibles para poder revisarlos.
                 _interactionSearchResults.RemoveAll(result => result.include);
+                RefreshScanResultSummary();
             }
         }
 
@@ -4261,13 +4441,85 @@ public class LocalizationManagerEditor : Editor
     private void RefreshCache()
     {
         TextAsset ta = _translationFile.objectReferenceValue as TextAsset;
-        if (ta == null) { _cachedData = null; _cachedLanguages = null; _cachedKeys = null; _cachedJsonHash = null; return; }
+        if (ta == null)
+        {
+            if (_hasTranslationFileStamp || _cachedData != null)
+                ResetTranslationState();
+            _translationFileStateDirty = false;
+            return;
+        }
 
-        // Usar longitud + primeros/ultimos chars como hash rapido y determinístico
+        // Comprobar identidad y estado del archivo solo cuando Unity informa cambios.
+        string assetPath = AssetDatabase.GetAssetPath(ta);
+        if (!_translationFileStateDirty &&
+            _hasTranslationFileStamp &&
+            _translationFileStamp.assetPath == assetPath &&
+            _translationFileStamp.instanceId == ta.GetInstanceID() &&
+            _cachedJsonHash != null)
+        {
+            return;
+        }
+
+        string fullPath = string.IsNullOrEmpty(assetPath)
+            ? ""
+            : Path.GetFullPath(assetPath);
+        FileInfo fileInfo = !string.IsNullOrEmpty(fullPath) &&
+            File.Exists(fullPath)
+            ? new FileInfo(fullPath)
+            : null;
+        TranslationFileStamp currentStamp = new TranslationFileStamp
+        {
+            assetPath = assetPath,
+            guid = string.IsNullOrEmpty(assetPath)
+                ? ""
+                : AssetDatabase.AssetPathToGUID(assetPath),
+            dependencyHash = string.IsNullOrEmpty(assetPath)
+                ? default(Hash128)
+                : AssetDatabase.GetAssetDependencyHash(assetPath),
+            creationTimeTicks = fileInfo != null
+                ? fileInfo.CreationTimeUtc.Ticks
+                : 0,
+            lastWriteTimeTicks = fileInfo != null
+                ? fileInfo.LastWriteTimeUtc.Ticks
+                : 0,
+            fileLength = fileInfo != null ? fileInfo.Length : 0,
+            instanceId = ta.GetInstanceID()
+        };
+        bool identityChanged = _hasTranslationFileStamp &&
+            (_translationFileStamp.assetPath != currentStamp.assetPath ||
+             _translationFileStamp.guid != currentStamp.guid ||
+             _translationFileStamp.creationTimeTicks !=
+                currentStamp.creationTimeTicks ||
+             _translationFileStamp.instanceId != currentStamp.instanceId);
+        bool contentChanged = !_hasTranslationFileStamp ||
+            _translationFileStamp.dependencyHash !=
+                currentStamp.dependencyHash ||
+            _translationFileStamp.lastWriteTimeTicks !=
+                currentStamp.lastWriteTimeTicks ||
+            _translationFileStamp.fileLength != currentStamp.fileLength ||
+            _cachedJsonHash == null;
+        if (identityChanged)
+        {
+            _canvasSearchResults = null;
+            _interactionSearchResults = null;
+            _interactionDetectedObjectCount = 0;
+            _interactionRegisteredObjectCount = 0;
+            InvalidateSceneKeyReferenceCounts();
+        }
+        _translationFileStamp = currentStamp;
+        _hasTranslationFileStamp = true;
+        bool shouldRefresh = contentChanged;
+        _translationFileStateDirty = false;
+        if (!shouldRefresh) return;
+
+        ClearTranslationJsonCache();
         string text = ta.text;
-        string hash = text.Length + (text.Length > 0 ? "_" + text[0] + text[text.Length - 1] : "");
-        if (hash == _cachedJsonHash) return;
-        _cachedJsonHash = hash;
+        _cachedJsonHash =
+            currentStamp.dependencyHash + "_" +
+            currentStamp.lastWriteTimeTicks + "_" +
+            currentStamp.fileLength;
+        _cachedTranslations =
+            IdiomasEditorUtils.ParseJsonToDictionary(text);
 
         if (VRCJson.TryDeserializeFromJson(ta.text, out DataToken d) &&
             d.TokenType == TokenType.DataDictionary)
@@ -4289,6 +4541,13 @@ public class LocalizationManagerEditor : Editor
             }
             _cachedKeys = new string[all.Count];
             all.CopyTo(_cachedKeys);
+        }
+        else
+        {
+            _cachedData = null;
+            _cachedLanguages = null;
+            _cachedKeys = null;
+            _cachedTranslations = null;
         }
     }
 
@@ -4339,8 +4598,8 @@ public class LocalizationManagerEditor : Editor
             _translationFile.objectReferenceValue = newAsset;
             serializedObject.ApplyModifiedProperties();
 
-            // Invalidar cache para que las estadisticas se actualicen
-            _cachedJsonHash = null;
+            // El archivo puede reutilizar la misma ruta y el mismo nombre.
+            ResetTranslationState();
 
             Debug.Log($"[Idiomas] Archivo de traducciones creado: {assetPath}");
             EditorUtility.DisplayDialog(S("mgr_json_created_title"),

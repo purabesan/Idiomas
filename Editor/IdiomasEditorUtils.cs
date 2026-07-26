@@ -314,22 +314,23 @@ public static class IdiomasEditorUtils
     }
 
     /// <summary>
-    /// Cuenta todas las referencias de una clave entre los Localizer de la escena.
+    /// Construye un indice con todas las referencias de claves entre los
+    /// Localizer de la escena.
     /// Incluye CanvasLocalizer, InteractionLocalizer y TextLocalizer.
     /// </summary>
-    public static int CountSceneTranslationKeyReferences(string key)
+    public static Dictionary<string, int>
+        BuildSceneTranslationKeyReferenceCounts()
     {
-        if (string.IsNullOrEmpty(key)) return 0;
-
-        int count = 0;
+        Dictionary<string, int> counts =
+            new Dictionary<string, int>(System.StringComparer.Ordinal);
         CanvasLocalizer[] canvasLocalizers =
             Object.FindObjectsByType<CanvasLocalizer>(
                 FindObjectsInactive.Include, FindObjectsSortMode.None);
         for (int i = 0; i < canvasLocalizers.Length; i++)
         {
             SerializedObject so = new SerializedObject(canvasLocalizers[i]);
-            count += CountStringArrayValue(so.FindProperty("tmpKeys"), key);
-            count += CountStringArrayValue(so.FindProperty("legacyKeys"), key);
+            AddStringArrayValues(so.FindProperty("tmpKeys"), counts);
+            AddStringArrayValues(so.FindProperty("legacyKeys"), counts);
         }
 
         InteractionLocalizer[] interactionLocalizers =
@@ -339,12 +340,11 @@ public static class IdiomasEditorUtils
         {
             SerializedObject so =
                 new SerializedObject(interactionLocalizers[i]);
-            count += CountStringArrayValue(
-                so.FindProperty("interactKeys"), key);
-            count += CountStringArrayValue(
-                so.FindProperty("pickupInteractionKeys"), key);
-            count += CountStringArrayValue(
-                so.FindProperty("pickupUseKeys"), key);
+            AddStringArrayValues(so.FindProperty("interactKeys"), counts);
+            AddStringArrayValues(
+                so.FindProperty("pickupInteractionKeys"), counts);
+            AddStringArrayValues(
+                so.FindProperty("pickupUseKeys"), counts);
         }
 
         TextLocalizer[] textLocalizers =
@@ -352,23 +352,42 @@ public static class IdiomasEditorUtils
                 FindObjectsInactive.Include, FindObjectsSortMode.None);
         for (int i = 0; i < textLocalizers.Length; i++)
         {
-            if (textLocalizers[i].GetTranslationKey() == key) count++;
+            AddKeyReference(
+                textLocalizers[i].GetTranslationKey(), counts);
         }
-        return count;
+        return counts;
     }
 
-    private static int CountStringArrayValue(
-        SerializedProperty property, string value)
+    /// <summary>
+    /// Cuenta todas las referencias de una clave entre los Localizer de la escena.
+    /// </summary>
+    public static int CountSceneTranslationKeyReferences(string key)
     {
-        if (property == null) return 0;
+        if (string.IsNullOrEmpty(key)) return 0;
+        Dictionary<string, int> counts =
+            BuildSceneTranslationKeyReferenceCounts();
+        return counts.TryGetValue(key, out int count) ? count : 0;
+    }
 
-        int count = 0;
+    private static void AddStringArrayValues(
+        SerializedProperty property, Dictionary<string, int> counts)
+    {
+        if (property == null) return;
         for (int i = 0; i < property.arraySize; i++)
         {
-            if (property.GetArrayElementAtIndex(i).stringValue == value)
-                count++;
+            AddKeyReference(
+                property.GetArrayElementAtIndex(i).stringValue, counts);
         }
-        return count;
+    }
+
+    private static void AddKeyReference(
+        string key, Dictionary<string, int> counts)
+    {
+        if (string.IsNullOrEmpty(key)) return;
+        if (counts.TryGetValue(key, out int count))
+            counts[key] = count + 1;
+        else
+            counts[key] = 1;
     }
 
     private static int GetSameNameSiblingOccurrence(Transform target)
