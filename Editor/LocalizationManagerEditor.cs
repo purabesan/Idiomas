@@ -65,6 +65,9 @@ public class LocalizationManagerEditor : Editor
     private bool _hasTranslationFileStamp;
     private bool _translationFileStateDirty = true;
     private ScanResultSummary _scanResultSummary;
+    private List<InteractionPendingRowSummary> _interactionPendingRows;
+    private List<InteractionPendingRowSummary> _interactionExcludedRows;
+    private List<InteractionRegisteredRowSummary> _interactionRegisteredRows;
 
     private struct TranslationFileStamp
     {
@@ -86,6 +89,23 @@ public class LocalizationManagerEditor : Editor
         public int interactionTextCount;
         public int interactionObjectCount;
         public bool hasInvalidInteractionKeys;
+    }
+
+    private class InteractionPendingRowSummary
+    {
+        public GameObject owner;
+        public int includedCount;
+        public int excludedCount;
+    }
+
+    private class InteractionRegisteredRowSummary
+    {
+        public GameObject owner;
+        public int textCount;
+        public int cleanCount;
+        public int modifiedCount;
+        public int missingCount;
+        public int sharedKeyCount;
     }
 
     // Shortcut para traducciones del editor
@@ -151,6 +171,9 @@ public class LocalizationManagerEditor : Editor
         _interactionDetectedObjectCount = 0;
         _interactionRegisteredObjectCount = 0;
         _scanResultSummary = null;
+        _interactionPendingRows = null;
+        _interactionExcludedRows = null;
+        _interactionRegisteredRows = null;
         InvalidateSceneKeyReferenceCounts();
         EditorApplication.hierarchyChanged +=
             InvalidateSceneKeyReferenceCounts;
@@ -297,6 +320,9 @@ public class LocalizationManagerEditor : Editor
             _interactionDetectedObjectCount = 0;
             _interactionRegisteredObjectCount = 0;
             _scanResultSummary = null;
+            _interactionPendingRows = null;
+            _interactionExcludedRows = null;
+            _interactionRegisteredRows = null;
         }
         EditorGUILayout.HelpBox(S("mgr_interaction_info"), MessageType.Info);
 
@@ -500,36 +526,52 @@ public class LocalizationManagerEditor : Editor
 
     private void DrawInteractionResults()
     {
-        if (_interactionSearchResults == null || _interactionSearchResults.Count == 0)
+        if (_interactionPendingRows == null ||
+            _interactionPendingRows.Count == 0)
             return;
 
         EditorGUILayout.Space(5);
-        Dictionary<GameObject, List<InteractionSearchResult>> groups =
-            new Dictionary<GameObject, List<InteractionSearchResult>>();
-        for (int i = 0; i < _interactionSearchResults.Count; i++)
+        for (int i = 0; i < _interactionPendingRows.Count; i++)
         {
-            InteractionSearchResult result = _interactionSearchResults[i];
-            Component component = result.target as Component;
-            if (component == null) continue;
-            if (!groups.TryGetValue(
-                component.gameObject,
-                out List<InteractionSearchResult> groupResults))
-            {
-                groupResults = new List<InteractionSearchResult>();
-                groups[component.gameObject] = groupResults;
-            }
-            groupResults.Add(result);
-        }
-
-        foreach (var pair in groups)
-        {
-            GameObject owner = pair.Key;
-            List<InteractionSearchResult> results = pair.Value;
+            InteractionPendingRowSummary row =
+                _interactionPendingRows[i];
+            if (row.owner == null) continue;
 
             EditorGUILayout.BeginVertical(EditorStyles.helpBox);
-            DrawInteractionSearchHeader(owner, results.Count);
+            DrawInteractionSearchHeader(
+                row.owner,
+                row.includedCount,
+                row.excludedCount);
 
             EditorGUILayout.EndVertical();
+        }
+    }
+
+    private void DrawExcludedInteractionResults()
+    {
+        if (_interactionExcludedRows == null ||
+            _interactionExcludedRows.Count == 0)
+        {
+            return;
+        }
+
+        EditorGUILayout.Space(5);
+        EditorGUILayout.LabelField(
+            S("mgr_no_translatable"),
+            EditorStyles.miniLabel);
+        GUIStyle grayStyle = new GUIStyle(EditorStyles.miniLabel);
+        grayStyle.normal.textColor = Color.gray;
+
+        for (int i = 0; i < _interactionExcludedRows.Count; i++)
+        {
+            InteractionPendingRowSummary row =
+                _interactionExcludedRows[i];
+            if (row.owner == null) continue;
+
+            EditorGUILayout.LabelField(
+                $"  {row.owner.name}, " +
+                GetInteractionHierarchyPath(row.owner.transform),
+                grayStyle);
         }
     }
 
@@ -550,33 +592,24 @@ public class LocalizationManagerEditor : Editor
     }
 
     private void DrawInteractionSearchHeader(
-        GameObject owner, int textCount)
+        GameObject owner, int includedCount, int excludedCount)
     {
         string countText =
-            string.Format(S("mgr_text_count"), textCount);
-        GUIStyle linkStyle = CreateInteractionLinkStyle(true);
-        GUIStyle countStyle =
-            CreateRightAlignedStyle(EditorStyles.miniLabel);
-        Rect row = EditorGUILayout.GetControlRect(
-            false, EditorGUIUtility.singleLineHeight);
-        float countWidth =
-            countStyle.CalcSize(new GUIContent(countText)).x;
-        Rect countRect = new Rect(
-            row.xMax - countWidth, row.y, countWidth, row.height);
-        Rect nameRect = new Rect(
-            row.x, row.y,
-            Mathf.Max(20f, countRect.x - row.x - 8f), row.height);
-
-        if (GUI.Button(
-            nameRect,
-            new GUIContent(
-                owner.name,
-                GetInteractionHierarchyPath(owner.transform)),
-            linkStyle))
+            string.Format(S("mgr_text_count"), includedCount);
+        string statusText = S("mgr_localizer_not_configured");
+        if (excludedCount > 0)
         {
-            EditorGUIUtility.PingObject(owner);
+            statusText += "  |  " +
+                $"{S("cl_legend_excluded")} {excludedCount}";
         }
-        GUI.Label(countRect, countText, countStyle);
+        GUIStyle linkStyle = CreateInteractionLinkStyle(true);
+        DrawLocalizedObjectStatusRow(
+            owner,
+            GetInteractionHierarchyPath(owner.transform),
+            countText,
+            statusText,
+            true,
+            linkStyle);
     }
 
     private void DrawInteractionLocalizerEditLink(
@@ -889,61 +922,42 @@ public class LocalizationManagerEditor : Editor
 
     private void DrawInteractionLocalizerList(InteractionLocalizer localizer)
     {
-        if (localizer == null) return;
+        if (localizer == null || _interactionRegisteredRows == null)
+            return;
 
-        SerializedObject localizerSO = new SerializedObject(localizer);
-        EnsureInteractionEnabledArrays(localizerSO);
-        Dictionary<GameObject, List<RegisteredInteractionEntry>> groups =
-            BuildRegisteredInteractionGroups(localizerSO);
-        Dictionary<string, string> baseEntries =
-            GetInteractionBaseLanguageEntries(localizer);
         int totalModified = 0;
         int totalMissing = 0;
 
         EditorGUILayout.LabelField(
             S("mgr_already_localized"), EditorStyles.boldLabel);
-        foreach (var pair in groups)
+        for (int i = 0; i < _interactionRegisteredRows.Count; i++)
         {
-            GameObject owner = pair.Key;
-            List<RegisteredInteractionEntry> entries = pair.Value;
-
-            int excluded = 0;
-            int clean = 0;
-            int modified = 0;
-            int missing = 0;
-            for (int i = 0; i < entries.Count; i++)
-            {
-                if (entries[i].enabled.boolValue)
-                {
-                    InteractionJsonState state =
-                        GetInteractionJsonState(entries[i], baseEntries);
-                    if (state == InteractionJsonState.Clean) clean++;
-                    else if (state == InteractionJsonState.Modified) modified++;
-                    else missing++;
-                }
-                else
-                    excluded++;
-            }
-            totalModified += modified;
-            totalMissing += missing;
+            InteractionRegisteredRowSummary row =
+                _interactionRegisteredRows[i];
+            if (row.owner == null) continue;
+            totalModified += row.modifiedCount;
+            totalMissing += row.missingCount;
 
             EditorGUILayout.BeginVertical(EditorStyles.helpBox);
             string countText = string.Format(
-                S("mgr_text_count"),
-                entries.Count - excluded);
+                S("mgr_text_count"), row.textCount);
             string jsonText =
-                $"JSON ✓ {clean}  △ {modified}  ! {missing}";
+                $"JSON ✓ {row.cleanCount}  △ {row.modifiedCount}  " +
+                $"! {row.missingCount}";
+            if (row.sharedKeyCount > 0)
+            {
+                jsonText += "  |  " +
+                    string.Format(
+                        S("mgr_shared_keys"), row.sharedKeyCount);
+            }
             DrawRegisteredInteractionHeader(
-                owner,
+                row.owner,
                 countText,
                 jsonText,
-                modified > 0 || missing > 0);
+                row.modifiedCount > 0 || row.missingCount > 0);
 
             EditorGUILayout.EndVertical();
         }
-
-        if (localizerSO.ApplyModifiedProperties())
-            EditorUtility.SetDirty(localizer);
 
         if (totalModified > 0 || totalMissing > 0)
         {
@@ -1251,6 +1265,11 @@ public class LocalizationManagerEditor : Editor
         HashSet<GameObject> detectedObjects = new HashSet<GameObject>();
         HashSet<GameObject> registeredObjects = new HashSet<GameObject>();
         HashSet<string> usedKeys = new HashSet<string>();
+        HashSet<Object> registeredUdonTargets = new HashSet<Object>();
+        HashSet<Object> registeredPickupInteractionTargets =
+            new HashSet<Object>();
+        HashSet<Object> registeredPickupUseTargets =
+            new HashSet<Object>();
         string[] excludedKeywords = ParseQuickSetupExcludedKeywords();
         if (_cachedKeys != null)
         {
@@ -1269,6 +1288,15 @@ public class LocalizationManagerEditor : Editor
                 registeredSO.FindProperty("pickupInteractionKeys"), usedKeys);
             AddAllStringArrayValues(
                 registeredSO.FindProperty("pickupUseKeys"), usedKeys);
+            AddAllObjectArrayValues(
+                registeredSO.FindProperty("interactTargets"),
+                registeredUdonTargets);
+            AddAllObjectArrayValues(
+                registeredSO.FindProperty("pickupInteractionTargets"),
+                registeredPickupInteractionTargets);
+            AddAllObjectArrayValues(
+                registeredSO.FindProperty("pickupUseTargets"),
+                registeredPickupUseTargets);
         }
 
         UdonBehaviour[] udonBehaviours = FindObjectsByType<UdonBehaviour>(
@@ -1297,8 +1325,7 @@ public class LocalizationManagerEditor : Editor
                 continue;
             }
             detectedObjects.Add(behaviour.gameObject);
-            if (IsInteractionTargetRegistered(
-                behaviour, InteractionTextType.UdonInteraction))
+            if (registeredUdonTargets.Contains(behaviour))
             {
                 registeredObjects.Add(behaviour.gameObject);
                 continue;
@@ -1327,8 +1354,7 @@ public class LocalizationManagerEditor : Editor
             if (!string.IsNullOrWhiteSpace(pickup.InteractionText))
             {
                 detectedObjects.Add(pickup.gameObject);
-                if (!IsInteractionTargetRegistered(
-                    pickup, InteractionTextType.PickupInteraction))
+                if (!registeredPickupInteractionTargets.Contains(pickup))
                 {
                     AddInteractionResult(
                         pickup,
@@ -1348,8 +1374,7 @@ public class LocalizationManagerEditor : Editor
                 (_includeDefaultUseText.boolValue || pickup.UseText != "Use"))
             {
                 detectedObjects.Add(pickup.gameObject);
-                if (!IsInteractionTargetRegistered(
-                    pickup, InteractionTextType.PickupUse))
+                if (!registeredPickupUseTargets.Contains(pickup))
                 {
                     AddInteractionResult(
                         pickup,
@@ -1378,6 +1403,18 @@ public class LocalizationManagerEditor : Editor
         {
             string value = property.GetArrayElementAtIndex(i).stringValue;
             if (!string.IsNullOrEmpty(value)) values.Add(value);
+        }
+    }
+
+    private static void AddAllObjectArrayValues(
+        SerializedProperty property, HashSet<Object> values)
+    {
+        if (property == null) return;
+        for (int i = 0; i < property.arraySize; i++)
+        {
+            Object value = property.GetArrayElementAtIndex(i)
+                .objectReferenceValue;
+            if (value != null) values.Add(value);
         }
     }
 
@@ -1546,6 +1583,122 @@ public class LocalizationManagerEditor : Editor
             summary.interactionObjectCount = owners.Count;
         }
         _scanResultSummary = summary;
+        RefreshInteractionRowSummaries();
+    }
+
+    private void RefreshInteractionRowSummaries()
+    {
+        RefreshSceneKeyReferenceCounts();
+        _interactionPendingRows =
+            new List<InteractionPendingRowSummary>();
+        _interactionExcludedRows =
+            new List<InteractionPendingRowSummary>();
+        _interactionRegisteredRows =
+            new List<InteractionRegisteredRowSummary>();
+
+        Dictionary<GameObject, InteractionPendingRowSummary> pendingRows =
+            new Dictionary<GameObject, InteractionPendingRowSummary>();
+        if (_interactionSearchResults != null)
+        {
+            for (int i = 0; i < _interactionSearchResults.Count; i++)
+            {
+                InteractionSearchResult result =
+                    _interactionSearchResults[i];
+                Component component = result.target as Component;
+                if (component == null) continue;
+                GameObject owner = component.gameObject;
+                if (!pendingRows.TryGetValue(
+                    owner, out InteractionPendingRowSummary row))
+                {
+                    row = new InteractionPendingRowSummary
+                    {
+                        owner = owner
+                    };
+                    pendingRows[owner] = row;
+                }
+                if (result.include)
+                    row.includedCount++;
+                else
+                    row.excludedCount++;
+            }
+        }
+        foreach (InteractionPendingRowSummary row
+            in pendingRows.Values)
+        {
+            if (row.includedCount > 0)
+                _interactionPendingRows.Add(row);
+            else
+                _interactionExcludedRows.Add(row);
+        }
+        _interactionPendingRows.Sort((a, b) =>
+            IdiomasEditorUtils.CompareStableComponents(
+                a.owner.transform, b.owner.transform));
+        _interactionExcludedRows.Sort((a, b) =>
+            IdiomasEditorUtils.CompareStableComponents(
+                a.owner.transform, b.owner.transform));
+
+        InteractionLocalizer localizer =
+            GetPrefabInteractionLocalizer(
+                target as LocalizationManager);
+        if (localizer == null) return;
+
+        SerializedObject localizerSO = new SerializedObject(localizer);
+        EnsureInteractionEnabledArrays(localizerSO);
+        if (localizerSO.ApplyModifiedProperties())
+            EditorUtility.SetDirty(localizer);
+        Dictionary<GameObject, List<RegisteredInteractionEntry>> groups =
+            BuildRegisteredInteractionGroups(localizerSO);
+        Dictionary<string, string> baseEntries =
+            GetInteractionBaseLanguageEntries(localizer);
+
+        foreach (KeyValuePair<GameObject,
+            List<RegisteredInteractionEntry>> pair in groups)
+        {
+            InteractionRegisteredRowSummary row =
+                new InteractionRegisteredRowSummary
+                {
+                    owner = pair.Key
+                };
+            Dictionary<string, int> localKeyReferences =
+                new Dictionary<string, int>(
+                    System.StringComparer.Ordinal);
+            List<RegisteredInteractionEntry> entries = pair.Value;
+            for (int i = 0; i < entries.Count; i++)
+            {
+                RegisteredInteractionEntry entry = entries[i];
+                if (!entry.enabled.boolValue) continue;
+                row.textCount++;
+                InteractionJsonState state =
+                    GetInteractionJsonState(entry, baseEntries);
+                if (state == InteractionJsonState.Clean)
+                    row.cleanCount++;
+                else if (state == InteractionJsonState.Modified)
+                    row.modifiedCount++;
+                else
+                    row.missingCount++;
+
+                string key = entry.key.stringValue;
+                if (string.IsNullOrEmpty(key)) continue;
+                localKeyReferences.TryGetValue(key, out int count);
+                localKeyReferences[key] = count + 1;
+            }
+
+            foreach (KeyValuePair<string, int> keyUsage
+                in localKeyReferences)
+            {
+                if (_sceneKeyReferenceCounts != null &&
+                    _sceneKeyReferenceCounts.TryGetValue(
+                        keyUsage.Key, out int sceneCount) &&
+                    sceneCount > keyUsage.Value)
+                {
+                    row.sharedKeyCount++;
+                }
+            }
+            _interactionRegisteredRows.Add(row);
+        }
+        _interactionRegisteredRows.Sort((a, b) =>
+            IdiomasEditorUtils.CompareStableComponents(
+                a.owner.transform, b.owner.transform));
     }
 
     private int CountIncludedInteractionTexts()
@@ -1871,6 +2024,7 @@ public class LocalizationManagerEditor : Editor
         localizerSO.ApplyModifiedProperties();
         EditorUtility.SetDirty(localizer);
         EditorUtility.SetDirty(localizer.gameObject);
+        InvalidateSceneKeyReferenceCounts();
     }
 
     private void SetRegisteredInteractionLocalizer(
@@ -1997,6 +2151,10 @@ public class LocalizationManagerEditor : Editor
             _interactionSearchResults = null;
             _interactionDetectedObjectCount = 0;
             _interactionRegisteredObjectCount = 0;
+            _scanResultSummary = null;
+            _interactionPendingRows = null;
+            _interactionExcludedRows = null;
+            _interactionRegisteredRows = null;
         }
 
         EditorGUILayout.Space(5);
@@ -2009,6 +2167,10 @@ public class LocalizationManagerEditor : Editor
         {
             serializedObject.ApplyModifiedProperties();
             _canvasSearchResults = null;
+            _scanResultSummary = null;
+            _interactionPendingRows = null;
+            _interactionExcludedRows = null;
+            _interactionRegisteredRows = null;
         }
 
         EditorGUILayout.HelpBox(
@@ -2624,6 +2786,7 @@ public class LocalizationManagerEditor : Editor
                 DrawInteractionResults();
                 if (interactionLocalizer != null)
                     DrawInteractionLocalizerList(interactionLocalizer);
+                DrawExcludedInteractionResults();
             }
         }
     }
@@ -2852,6 +3015,9 @@ public class LocalizationManagerEditor : Editor
         _interactionDetectedObjectCount = 0;
         _interactionRegisteredObjectCount = 0;
         _scanResultSummary = null;
+        _interactionPendingRows = null;
+        _interactionExcludedRows = null;
+        _interactionRegisteredRows = null;
         _hasTranslationFileStamp = false;
         _translationFileStateDirty = true;
         InvalidateSceneKeyReferenceCounts();
@@ -4504,6 +4670,10 @@ public class LocalizationManagerEditor : Editor
             _interactionSearchResults = null;
             _interactionDetectedObjectCount = 0;
             _interactionRegisteredObjectCount = 0;
+            _scanResultSummary = null;
+            _interactionPendingRows = null;
+            _interactionExcludedRows = null;
+            _interactionRegisteredRows = null;
             InvalidateSceneKeyReferenceCounts();
         }
         _translationFileStamp = currentStamp;
@@ -4549,6 +4719,8 @@ public class LocalizationManagerEditor : Editor
             _cachedKeys = null;
             _cachedTranslations = null;
         }
+        if (_canvasSearchResults != null)
+            RefreshInteractionRowSummaries();
     }
 
     // =====================================================================
