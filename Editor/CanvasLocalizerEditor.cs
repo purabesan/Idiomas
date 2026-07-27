@@ -441,19 +441,22 @@ public class CanvasLocalizerEditor : Editor
 
             string text = tmp.text;
             if (string.IsNullOrEmpty(text) || string.IsNullOrWhiteSpace(text)) continue;
+            string normalizedText =
+                IdiomasEditorUtils.NormalizeLineEndings(text);
 
             // Determinar clave: preservar existente o generar nueva
             string key;
             if (existingKeys.ContainsKey(tmp))
                 key = existingKeys[tmp];
-            else if (canonicalByText.TryGetValue(text, out string sharedKey))
+            else if (canonicalByText.TryGetValue(
+                normalizedText, out string sharedKey))
                 key = sharedKey;
             else
                 key = GenerateKey(root, tmp.transform, id, usedKeys);
 
             usedKeys.Add(key);
-            if (!canonicalByText.ContainsKey(text))
-                canonicalByText[text] = key;
+            if (!canonicalByText.ContainsKey(normalizedText))
+                canonicalByText[normalizedText] = key;
 
             bool wasConfigured = existingKeys.ContainsKey(tmp);
             _scanResults.Add(new ScanEntry
@@ -482,19 +485,21 @@ public class CanvasLocalizerEditor : Editor
 
             string text = txt.text;
             if (string.IsNullOrEmpty(text) || string.IsNullOrWhiteSpace(text)) continue;
+            string normalizedText =
+                IdiomasEditorUtils.NormalizeLineEndings(text);
 
             string key;
             if (existingKeys.ContainsKey(txt))
                 key = existingKeys[txt];
             else if (canonicalByText.TryGetValue(
-                text, out string sharedKey))
+                normalizedText, out string sharedKey))
                 key = sharedKey;
             else
                 key = GenerateKey(root, txt.transform, id, usedKeys);
 
             usedKeys.Add(key);
-            if (!canonicalByText.ContainsKey(text))
-                canonicalByText[text] = key;
+            if (!canonicalByText.ContainsKey(normalizedText))
+                canonicalByText[normalizedText] = key;
 
             bool wasConfiguredLegacy = existingKeys.ContainsKey(txt);
             _scanResults.Add(new ScanEntry
@@ -598,7 +603,8 @@ public class CanvasLocalizerEditor : Editor
                 baseEntries.TryGetValue(
                     entry.generatedKey, out DataToken storedText) &&
                 storedText.TokenType == TokenType.String &&
-                storedText.String == entry.currentText;
+                IdiomasEditorUtils.TextEquals(
+                    storedText.String, entry.currentText);
             _scanResults[i] = entry;
         }
     }
@@ -668,10 +674,9 @@ public class CanvasLocalizerEditor : Editor
                 if (sourceTextByKey.TryGetValue(
                     k, out string existingText))
                 {
-                    if (!string.Equals(
+                    if (!IdiomasEditorUtils.TextEquals(
                         existingText,
-                        _scanResults[i].currentText,
-                        System.StringComparison.Ordinal))
+                        _scanResults[i].currentText))
                     {
                         conflictingKeys.Add(k);
                     }
@@ -963,10 +968,15 @@ public class CanvasLocalizerEditor : Editor
             ScanEntry entry = _scanResults[i];
             entry.canonicalKey = null;
             entry.shareCanonicalKey = false;
+            string normalizedText =
+                IdiomasEditorUtils.NormalizeLineEndings(
+                    entry.currentText);
 
             // Separar automaticamente una clave compartida si solo este texto cambio.
             if (baseEntries != null && baseEntries.ContainsKey(entry.generatedKey) &&
-                baseEntries[entry.generatedKey] != entry.currentText &&
+                !IdiomasEditorUtils.TextEquals(
+                    baseEntries[entry.generatedKey],
+                    normalizedText) &&
                 IdiomasEditorUtils.CountSceneTranslationKeyReferences(
                     entry.generatedKey) > 1)
             {
@@ -977,15 +987,18 @@ public class CanvasLocalizerEditor : Editor
                 entry.existsInJson = false;
             }
 
-            if (!entry.excluded && canonicalByText.TryGetValue(entry.currentText, out string canonical) &&
+            if (!entry.excluded &&
+                canonicalByText.TryGetValue(
+                    normalizedText, out string canonical) &&
                 canonical != entry.generatedKey)
             {
                 entry.canonicalKey = canonical;
                 entry.shareCanonicalKey = true;
             }
-            else if (!entry.excluded && !canonicalByText.ContainsKey(entry.currentText))
+            else if (!entry.excluded &&
+                !canonicalByText.ContainsKey(normalizedText))
             {
-                canonicalByText[entry.currentText] = entry.generatedKey;
+                canonicalByText[normalizedText] = entry.generatedKey;
             }
             _scanResults[i] = entry;
         }
@@ -1856,6 +1869,8 @@ public class CanvasLocalizerEditor : Editor
             if (tmp.GetComponent<TextLocalizer>() != null) continue;
             string text = tmp.text;
             if (string.IsNullOrEmpty(text) || string.IsNullOrWhiteSpace(text)) continue;
+            string normalizedText =
+                IdiomasEditorUtils.NormalizeLineEndings(text);
             if (IsNonTranslatable(text)) continue;
             if (QuickSetup_ContainsExcludedKeyword(text, excludedKeywordsProp))
             {
@@ -1864,11 +1879,11 @@ public class CanvasLocalizerEditor : Editor
             }
 
             string key;
-            if (!canonicalByText.TryGetValue(text, out key))
+            if (!canonicalByText.TryGetValue(normalizedText, out key))
             {
                 key = GenerateKey(root, tmp.transform, canvasId, usedKeys);
-                canonicalByText[text] = key;
-                translations[baseLang][key] = text;
+                canonicalByText[normalizedText] = key;
+                translations[baseLang][key] = normalizedText;
             }
             usedKeys.Add(key);
             tmpList.Add(tmp);
@@ -1885,6 +1900,8 @@ public class CanvasLocalizerEditor : Editor
             if (txt.GetComponent<TextLocalizer>() != null) continue;
             string text = txt.text;
             if (string.IsNullOrEmpty(text) || string.IsNullOrWhiteSpace(text)) continue;
+            string normalizedText =
+                IdiomasEditorUtils.NormalizeLineEndings(text);
             if (IsNonTranslatable(text)) continue;
             if (QuickSetup_ContainsExcludedKeyword(text, excludedKeywordsProp))
             {
@@ -1893,11 +1910,11 @@ public class CanvasLocalizerEditor : Editor
             }
 
             string key;
-            if (!canonicalByText.TryGetValue(text, out key))
+            if (!canonicalByText.TryGetValue(normalizedText, out key))
             {
                 key = GenerateKey(root, txt.transform, canvasId, usedKeys);
-                canonicalByText[text] = key;
-                translations[baseLang][key] = text;
+                canonicalByText[normalizedText] = key;
+                translations[baseLang][key] = normalizedText;
             }
             usedKeys.Add(key);
             legacyList.Add(txt);

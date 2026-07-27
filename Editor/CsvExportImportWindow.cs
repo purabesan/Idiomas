@@ -226,7 +226,8 @@ public class CsvExportImportWindow : EditorWindow
                 {
                     value = vt.String;
                 }
-                sb.Append(CsvEscape(value));
+                sb.Append(CsvEscape(
+                    IdiomasEditorUtils.NormalizeLineEndings(value)));
             }
             sb.AppendLine();
         }
@@ -311,7 +312,8 @@ public class CsvExportImportWindow : EditorWindow
             for (int c = 0; c < languages.Length && c + 1 < cols.Length; c++)
             {
                 string lang = languages[c];
-                string value = cols[c + 1];
+                string value =
+                    IdiomasEditorUtils.NormalizeLineEndings(cols[c + 1]);
 
                 if (string.IsNullOrEmpty(value)) continue;
 

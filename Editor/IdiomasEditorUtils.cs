@@ -36,7 +36,8 @@ public static class IdiomasEditorUtils
             keys.Sort(System.StringComparer.Ordinal);
             for (int i = 0; i < keys.Count; i++)
             {
-                string value = baseEntries[keys[i]];
+                string value =
+                    NormalizeLineEndings(baseEntries[keys[i]]);
                 if (!string.IsNullOrEmpty(value) &&
                     !result.ContainsKey(value))
                 {
@@ -98,6 +99,7 @@ public static class IdiomasEditorUtils
             if (component is TMPro.TextMeshProUGUI tmp) text = tmp.text;
             else if (component is UnityEngine.UI.Text legacy)
                 text = legacy.text;
+            text = NormalizeLineEndings(text);
             if (!string.IsNullOrEmpty(text) &&
                 !string.IsNullOrEmpty(key) && !result.ContainsKey(text))
             {
@@ -132,6 +134,7 @@ public static class IdiomasEditorUtils
                 text = backing != null ? backing.InteractionText :
                     behaviour.InteractionText;
             }
+            text = NormalizeLineEndings(text);
             if (!string.IsNullOrEmpty(text) &&
                 !string.IsNullOrEmpty(key) && !result.ContainsKey(text))
             {
@@ -205,7 +208,7 @@ public static class IdiomasEditorUtils
             for (int j = 0; j < keys.Count; j++)
             {
                 string key = keys[j];
-                string value = data[lang][key];
+                string value = NormalizeLineEndings(data[lang][key]);
                 string comma = j < keys.Count - 1 ? "," : "";
                 sb.AppendLine($"        \"{EscapeJson(key)}\": \"{EscapeJson(value)}\"{comma}");
             }
@@ -216,6 +219,26 @@ public static class IdiomasEditorUtils
 
         sb.AppendLine("}");
         return sb.ToString();
+    }
+
+    /// <summary>
+    /// Normaliza saltos de linea reales a LF sin convertir secuencias
+    /// literales como barra invertida seguida de la letra n.
+    /// </summary>
+    public static string NormalizeLineEndings(string value)
+    {
+        if (value == null) return "";
+        return value
+            .Replace("\r\n", "\n")
+            .Replace("\r", "\n");
+    }
+
+    public static bool TextEquals(string left, string right)
+    {
+        return string.Equals(
+            NormalizeLineEndings(left),
+            NormalizeLineEndings(right),
+            System.StringComparison.Ordinal);
     }
 
     /// <summary>

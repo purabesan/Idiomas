@@ -977,7 +977,7 @@ public class LocalizationManagerEditor : Editor
         {
             return InteractionJsonState.Missing;
         }
-        return string.Equals(jsonText, entry.text, System.StringComparison.Ordinal)
+        return IdiomasEditorUtils.TextEquals(jsonText, entry.text)
             ? InteractionJsonState.Clean
             : InteractionJsonState.Modified;
     }
@@ -3384,10 +3384,12 @@ public class LocalizationManagerEditor : Editor
         }
         foreach (KeyValuePair<string, string> pair in baseEntries)
         {
-            if (!string.IsNullOrEmpty(pair.Value) &&
-                !canonicalByText.ContainsKey(pair.Value))
+            string normalizedValue =
+                IdiomasEditorUtils.NormalizeLineEndings(pair.Value);
+            if (!string.IsNullOrEmpty(normalizedValue) &&
+                !canonicalByText.ContainsKey(normalizedValue))
             {
-                canonicalByText[pair.Value] = pair.Key;
+                canonicalByText[normalizedValue] = pair.Key;
             }
         }
 
@@ -3398,16 +3400,19 @@ public class LocalizationManagerEditor : Editor
         for (int i = 0; i < entries.Count; i++)
         {
             RegisteredCanvasEntry entry = entries[i];
+            string normalizedText =
+                IdiomasEditorUtils.NormalizeLineEndings(entry.text);
             string oldKey = entry.key.stringValue;
             string key = oldKey;
             if (canonicalByText.TryGetValue(
-                entry.text, out string canonicalKey))
+                normalizedText, out string canonicalKey))
             {
                 key = canonicalKey;
             }
             else if (!string.IsNullOrWhiteSpace(oldKey) &&
                 baseEntries.TryGetValue(oldKey, out string storedText) &&
-                storedText != entry.text &&
+                !IdiomasEditorUtils.TextEquals(
+                    storedText, normalizedText) &&
                 GetInteractionReferenceCount(referenceCounts, oldKey) > 1)
             {
                 key = GenerateInteractionDetachedKey(
@@ -3439,20 +3444,22 @@ public class LocalizationManagerEditor : Editor
             }
 
             reservedKeys.Add(key);
-            canonicalByText[entry.text] = key;
+            canonicalByText[normalizedText] = key;
             bool modifiesExistingKey =
                 key == oldKey &&
                 baseEntries.TryGetValue(key, out string current) &&
-                current != entry.text;
+                !IdiomasEditorUtils.TextEquals(
+                    current, normalizedText);
             if (!baseEntries.TryGetValue(key, out current) ||
-                current != entry.text)
+                !IdiomasEditorUtils.TextEquals(
+                    current, normalizedText))
             {
                 if (modifiesExistingKey && clearModifiedTranslations)
                 {
                     RemoveTranslationsExceptBase(
                         translations, baseLanguage, key);
                 }
-                baseEntries[key] = entry.text;
+                baseEntries[key] = normalizedText;
                 updated++;
             }
         }
@@ -3514,7 +3521,8 @@ public class LocalizationManagerEditor : Editor
         {
             string key = entries[i].key.stringValue;
             if (baseEntries.TryGetValue(key, out string storedText) &&
-                storedText != entries[i].text)
+                !IdiomasEditorUtils.TextEquals(
+                    storedText, entries[i].text))
             {
                 modified++;
             }
@@ -3548,7 +3556,8 @@ public class LocalizationManagerEditor : Editor
                 string key = entry.key.stringValue;
                 if (entry.enabled.boolValue &&
                     baseEntries.TryGetValue(key, out string storedText) &&
-                    storedText != entry.text)
+                    !IdiomasEditorUtils.TextEquals(
+                        storedText, entry.text))
                 {
                     modified++;
                 }
@@ -3628,10 +3637,12 @@ public class LocalizationManagerEditor : Editor
         }
         foreach (KeyValuePair<string, string> pair in baseEntries)
         {
-            if (!string.IsNullOrEmpty(pair.Value) &&
-                !canonicalByText.ContainsKey(pair.Value))
+            string normalizedValue =
+                IdiomasEditorUtils.NormalizeLineEndings(pair.Value);
+            if (!string.IsNullOrEmpty(normalizedValue) &&
+                !canonicalByText.ContainsKey(normalizedValue))
             {
-                canonicalByText[pair.Value] = pair.Key;
+                canonicalByText[normalizedValue] = pair.Key;
             }
         }
 
@@ -3648,16 +3659,19 @@ public class LocalizationManagerEditor : Editor
                 continue;
             }
 
+            string normalizedText =
+                IdiomasEditorUtils.NormalizeLineEndings(entry.text);
             string oldKey = entry.key.stringValue;
             string key = oldKey;
             if (canonicalByText.TryGetValue(
-                entry.text, out string canonicalKey))
+                normalizedText, out string canonicalKey))
             {
                 key = canonicalKey;
             }
             else if (!string.IsNullOrWhiteSpace(oldKey) &&
                 baseEntries.TryGetValue(oldKey, out string storedText) &&
-                storedText != entry.text &&
+                !IdiomasEditorUtils.TextEquals(
+                    storedText, normalizedText) &&
                 GetInteractionReferenceCount(referenceCounts, oldKey) > 1)
             {
                 key = GenerateInteractionDetachedKey(
@@ -3689,20 +3703,22 @@ public class LocalizationManagerEditor : Editor
             }
 
             reservedKeys.Add(key);
-            canonicalByText[entry.text] = key;
+            canonicalByText[normalizedText] = key;
             bool modifiesExistingKey =
                 key == oldKey &&
                 baseEntries.TryGetValue(key, out string current) &&
-                current != entry.text;
+                !IdiomasEditorUtils.TextEquals(
+                    current, normalizedText);
             if (!baseEntries.TryGetValue(key, out current) ||
-                current != entry.text)
+                !IdiomasEditorUtils.TextEquals(
+                    current, normalizedText))
             {
                 if (modifiesExistingKey && clearModifiedTranslations)
                 {
                     RemoveTranslationsExceptBase(
                         translations, baseLanguage, key);
                 }
-                baseEntries[key] = entry.text;
+                baseEntries[key] = normalizedText;
                 updated++;
             }
         }
@@ -4169,7 +4185,8 @@ public class LocalizationManagerEditor : Editor
                 }
 
                 if (entry.component is TextMeshProUGUI tmp &&
-                    tmp.text != synchronizedText)
+                    !IdiomasEditorUtils.TextEquals(
+                        tmp.text, synchronizedText))
                 {
                     Undo.RecordObject(tmp, "Apply Synchronized Text");
                     tmp.text = synchronizedText;
@@ -4177,7 +4194,8 @@ public class LocalizationManagerEditor : Editor
                     applied++;
                 }
                 else if (entry.component is Text legacy &&
-                    legacy.text != synchronizedText)
+                    !IdiomasEditorUtils.TextEquals(
+                        legacy.text, synchronizedText))
                 {
                     Undo.RecordObject(
                         legacy, "Apply Synchronized Text");
@@ -4246,7 +4264,8 @@ public class LocalizationManagerEditor : Editor
                 ? IdiomasEditorUtils.FindUdonBehaviourFor(behaviour)
                 : null;
             if (backing == null ||
-                backing.InteractionText == synchronizedText)
+                IdiomasEditorUtils.TextEquals(
+                    backing.InteractionText, synchronizedText))
             {
                 return false;
             }
@@ -4261,14 +4280,19 @@ public class LocalizationManagerEditor : Editor
         if (pickup == null) return false;
         if (entry.type == InteractionTextType.PickupUse)
         {
-            if (pickup.UseText == synchronizedText) return false;
+            if (IdiomasEditorUtils.TextEquals(
+                pickup.UseText, synchronizedText))
+            {
+                return false;
+            }
             Undo.RecordObject(
                 pickup, "Apply Synchronized Interaction Text");
             pickup.UseText = synchronizedText;
         }
         else
         {
-            if (pickup.InteractionText == synchronizedText)
+            if (IdiomasEditorUtils.TextEquals(
+                pickup.InteractionText, synchronizedText))
                 return false;
             Undo.RecordObject(
                 pickup, "Apply Synchronized Interaction Text");
