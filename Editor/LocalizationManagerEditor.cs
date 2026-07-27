@@ -3261,10 +3261,16 @@ public class LocalizationManagerEditor : Editor
         AssetDatabase.Refresh();
 
         _cachedJsonHash = null;
-        ((LocalizationManager)target).ApplyToAll();
+        int appliedTexts = ApplySynchronizedTextsInEditor(
+            translations,
+            new List<CanvasLocalizer> { cl },
+            new List<InteractionLocalizer>());
 
         string canvasId = cl.GetCanvasId();
-        Debug.Log($"[Idiomas] Restauradas {added} claves al JSON (canvas \"{canvasId}\", idioma \"{baseLang}\").");
+        Debug.Log(
+            $"[Idiomas] Restauradas {added} claves al JSON " +
+            $"(canvas \"{canvasId}\", idioma \"{baseLang}\"). " +
+            $"{appliedTexts} textos reaplicados.");
         EditorUtility.DisplayDialog(S("mgr_restore_json_title"),
             string.Format(S("mgr_restore_json_msg"), added, baseLang, canvasId),
             S("ok"));
@@ -4106,19 +4112,170 @@ public class LocalizationManagerEditor : Editor
         AssetDatabase.Refresh();
 
         _cachedJsonHash = null;
-        ((LocalizationManager)target).ApplyToAll();
+        int appliedTexts = ApplySynchronizedTextsInEditor(
+            translations,
+            localizers,
+            interactionLocalizers);
 
         int totalLocalizers = localizers.Count + interactionLocalizers.Count;
         Debug.Log(
             $"[Idiomas] Restauracion global: {totalAdded} claves de " +
-            $"{canvasProcessed} localizers.");
+            $"{canvasProcessed} localizers, " +
+            $"{appliedTexts} textos reaplicados.");
         EditorUtility.DisplayDialog(S("mgr_restore_all_title"),
             string.Format(
                 S("mgr_restore_all_msg"),
                 totalAdded,
                 canvasProcessed,
-                totalLocalizers),
+                totalLocalizers,
+                appliedTexts),
             S("ok"));
+    }
+
+    /// <summary>
+    /// Reaplica en el Editor los textos del idioma base sin inicializar el
+    /// LocalizationManager ni depender de la API de idioma de VRChat.
+    /// </summary>
+    private static int ApplySynchronizedTextsInEditor(
+        Dictionary<string, Dictionary<string, string>> translations,
+        List<CanvasLocalizer> canvasLocalizers,
+        List<InteractionLocalizer> interactionLocalizers)
+    {
+        if (translations == null) return 0;
+
+        int applied = 0;
+        for (int i = 0; i < canvasLocalizers.Count; i++)
+        {
+            CanvasLocalizer localizer = canvasLocalizers[i];
+            if (localizer == null ||
+                !translations.TryGetValue(
+                    localizer.GetBaseLanguage(),
+                    out Dictionary<string, string> baseEntries))
+            {
+                continue;
+            }
+
+            List<RegisteredCanvasEntry> entries =
+                BuildRegisteredCanvasEntries(
+                    new SerializedObject(localizer));
+            for (int j = 0; j < entries.Count; j++)
+            {
+                RegisteredCanvasEntry entry = entries[j];
+                string key = entry.key.stringValue;
+                if (!baseEntries.TryGetValue(
+                    key, out string synchronizedText))
+                {
+                    continue;
+                }
+
+                if (entry.component is TextMeshProUGUI tmp &&
+                    tmp.text != synchronizedText)
+                {
+                    Undo.RecordObject(tmp, "Apply Synchronized Text");
+                    tmp.text = synchronizedText;
+                    EditorUtility.SetDirty(tmp);
+                    applied++;
+                }
+                else if (entry.component is Text legacy &&
+                    legacy.text != synchronizedText)
+                {
+                    Undo.RecordObject(
+                        legacy, "Apply Synchronized Text");
+                    legacy.text = synchronizedText;
+                    EditorUtility.SetDirty(legacy);
+                    applied++;
+                }
+            }
+        }
+
+        for (int i = 0; i < interactionLocalizers.Count; i++)
+        {
+            InteractionLocalizer localizer = interactionLocalizers[i];
+            if (localizer == null ||
+                !translations.TryGetValue(
+                    localizer.GetBaseLanguage(),
+                    out Dictionary<string, string> baseEntries))
+            {
+                continue;
+            }
+
+            SerializedObject localizerSO =
+                new SerializedObject(localizer);
+            EnsureInteractionEnabledArrays(localizerSO);
+            Dictionary<GameObject, List<RegisteredInteractionEntry>>
+                groups = BuildRegisteredInteractionGroups(localizerSO);
+            foreach (KeyValuePair<GameObject,
+                List<RegisteredInteractionEntry>> group in groups)
+            {
+                List<RegisteredInteractionEntry> entries = group.Value;
+                for (int j = 0; j < entries.Count; j++)
+                {
+                    RegisteredInteractionEntry entry = entries[j];
+                    if (!entry.enabled.boolValue ||
+                        !baseEntries.TryGetValue(
+                            entry.key.stringValue,
+                            out string synchronizedText))
+                    {
+                        continue;
+                    }
+                    if (ApplyInteractionTextInEditor(
+                        entry, synchronizedText))
+                    {
+                        applied++;
+                    }
+                }
+            }
+            if (localizerSO.ApplyModifiedProperties())
+                EditorUtility.SetDirty(localizer);
+        }
+
+        if (applied > 0)
+            SceneView.RepaintAll();
+        return applied;
+    }
+
+    private static bool ApplyInteractionTextInEditor(
+        RegisteredInteractionEntry entry,
+        string synchronizedText)
+    {
+        if (entry.type == InteractionTextType.UdonInteraction)
+        {
+            UdonSharpBehaviour behaviour =
+                entry.target as UdonSharpBehaviour;
+            UdonBehaviour backing = behaviour != null
+                ? IdiomasEditorUtils.FindUdonBehaviourFor(behaviour)
+                : null;
+            if (backing == null ||
+                backing.InteractionText == synchronizedText)
+            {
+                return false;
+            }
+            Undo.RecordObject(
+                backing, "Apply Synchronized Interaction Text");
+            backing.InteractionText = synchronizedText;
+            EditorUtility.SetDirty(backing);
+            return true;
+        }
+
+        VRCPickup pickup = entry.target as VRCPickup;
+        if (pickup == null) return false;
+        if (entry.type == InteractionTextType.PickupUse)
+        {
+            if (pickup.UseText == synchronizedText) return false;
+            Undo.RecordObject(
+                pickup, "Apply Synchronized Interaction Text");
+            pickup.UseText = synchronizedText;
+        }
+        else
+        {
+            if (pickup.InteractionText == synchronizedText)
+                return false;
+            Undo.RecordObject(
+                pickup, "Apply Synchronized Interaction Text");
+            pickup.InteractionText = synchronizedText;
+        }
+        EditorUtility.SetDirty(pickup);
+        return true;
     }
 
     // =====================================================================
