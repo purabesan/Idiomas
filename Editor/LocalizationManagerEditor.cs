@@ -324,8 +324,6 @@ public class LocalizationManagerEditor : Editor
             _interactionExcludedRows = null;
             _interactionRegisteredRows = null;
         }
-        EditorGUILayout.HelpBox(S("mgr_interaction_info"), MessageType.Info);
-
         // === CONDICIONES DE EXCLUSION ===
         EditorGUILayout.Space(5);
         _showExclusionConditions = EditorGUILayout.Foldout(
