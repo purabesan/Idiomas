@@ -38,7 +38,7 @@ public static class IdiomasEditorUtils
             keys.Sort(System.StringComparer.Ordinal);
             for (int i = 0; i < keys.Count; i++)
             {
-                string value = baseEntries[keys[i]];
+                string value = NormalizeLineEndings(baseEntries[keys[i]]);
                 if (!string.IsNullOrEmpty(value) &&
                     !result.ContainsKey(value))
                 {
@@ -82,12 +82,33 @@ public static class IdiomasEditorUtils
             if (component is TMPro.TextMeshProUGUI tmp) text = tmp.text;
             else if (component is UnityEngine.UI.Text legacy)
                 text = legacy.text;
+            text = NormalizeLineEndings(text);
             if (!string.IsNullOrEmpty(text) &&
                 !string.IsNullOrEmpty(key) && !result.ContainsKey(text))
             {
                 result[text] = key;
             }
         }
+    }
+
+    /// <summary>
+    /// Normaliza saltos de linea reales a LF sin convertir secuencias
+    /// literales como barra invertida seguida de la letra n.
+    /// </summary>
+    public static string NormalizeLineEndings(string value)
+    {
+        if (value == null) return "";
+        return value
+            .Replace("\r\n", "\n")
+            .Replace("\r", "\n");
+    }
+
+    public static bool TextEquals(string left, string right)
+    {
+        return string.Equals(
+            NormalizeLineEndings(left),
+            NormalizeLineEndings(right),
+            System.StringComparison.Ordinal);
     }
 
     // =====================================================================
